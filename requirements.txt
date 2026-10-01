@@ -1,0 +1,2 @@
+# esp-printhost needs no third-party Python packages (standard library + tkinter only).
+# System packages are installed by printhost.py: build-essential cmake zlib1g-dev python3-tk acl

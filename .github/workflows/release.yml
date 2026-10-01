@@ -1,0 +1,26 @@
+name: Release
+# Creates a pre-release when a tag like v0.1.0-wip is pushed, or on demand from the Actions tab.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (created on main if it does not exist)
+        default: v0.1.0-wip
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "release $TAG exists"; exit 0; fi
+          gh release create "$TAG" --target "${{ github.sha }}" --prerelease \
+            --title "esp-printhost $TAG (work in progress)" \
+            --notes "**WORK IN PROGRESS: proof of concept, many features may be broken.** See CHANGELOG.md and the README's Known limitations. Run on Linux with: sudo python3 printhost.py"

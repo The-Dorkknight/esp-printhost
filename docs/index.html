@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>esp-printhost</title>
+<meta name="description" content="Work-in-progress proof of concept: a WiFi brain for old 3D printers, starting with a tested C++ Klipper protocol library and PC probe tools. GPL-3.0.">
+<link rel="icon" href="images/favicon-64.png">
+<link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+<style>
+:root{--bg:#f6f8f9;--fg:#14262e;--mut:#4c616b;--card:#fff;--bd:#d5dee2;--acc:#123440;--warn:#fff3cd;--warnfg:#5c4400;--warnbd:#e0c35a}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1b21;--fg:#e6eef1;--mut:#9db2bb;--card:#16272f;--bd:#27414c;--acc:#7cc4d8;--warn:#3a3000;--warnfg:#ffe9a0;--warnbd:#8a7100}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:900px;margin:0 auto;padding:0 16px}
+.banner{background:var(--warn);color:var(--warnfg);border-bottom:2px solid var(--warnbd);text-align:center;padding:10px 16px;font-weight:700}
+header{display:flex;gap:20px;align-items:center;padding:32px 0 8px;flex-wrap:wrap}
+header img{width:96px;height:96px;border-radius:20px}
+h1{margin:0;font-size:2rem}h2{margin:32px 0 8px}
+.lead{color:var(--mut);margin:4px 0 0}
+.btns{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+.btn{display:inline-block;padding:9px 16px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);text-decoration:none;font-weight:600}
+.btn.p{background:var(--acc);color:var(--bg);border-color:var(--acc)}
+.shot{width:100%;height:auto;border:1px solid var(--bd);border-radius:10px;margin:8px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px}
+.card h3{margin:0 0 4px;font-size:1.05rem}.card p{margin:0;color:var(--mut)}
+pre{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:12px;overflow:auto}
+code{font-family:ui-monospace,Menlo,Consolas,monospace}
+.note{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--warnbd);border-radius:8px;padding:10px 14px}
+footer{margin:40px 0;color:var(--mut);font-size:.9rem;border-top:1px solid var(--bd);padding-top:16px}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="banner">WORK IN PROGRESS: MANY FEATURES MAY BE BROKEN. Proof of concept, 0.1.0-wip.</div>
+<div class="wrap">
+<header>
+  <img src="images/icon-512.png" alt="esp-printhost icon">
+  <div>
+    <h1>esp-printhost</h1>
+    <p class="lead">A WiFi "brain" for old 3D printers. Today: a tested C++ Klipper protocol library and PC tools. Slow-moving hobby project.</p>
+  </div>
+</header>
+<div class="btns">
+  <a class="btn p" id="repo" href="https://github.com/The-Dorkknight/esp-printhost">View on GitHub</a>
+  <a class="btn" id="rel" href="https://github.com/The-Dorkknight/esp-printhost/releases">Releases</a>
+  <a class="btn" id="docs" href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/DESIGN.md">Design notes</a>
+</div>
+
+<img class="shot" src="images/gui-probe.webp" alt="esp-printhost GUI running the probe against the simulated board" width="900" height="680">
+<p class="lead">The GUI talking to the built-in <em>simulated</em> board (no hardware in this screenshot).</p>
+
+<h2>What works today</h2>
+<div class="cards">
+  <div class="card"><h3>Klipper protocol in C++</h3><p>CRC16, variable-length ints, framing, resync and the board's data dictionary. 122 unit tests.</p></div>
+  <div class="card"><h3>Probe a real board</h3><p>Identify it, list its pins, reset it, toggle one pin. Tried on a BTT SKR Pico (RP2040).</p></div>
+  <div class="card"><h3>No hardware needed</h3><p>A fake board speaks the same protocol so you can try everything on a laptop.</p></div>
+  <div class="card"><h3>One-command setup</h3><p>Installs dependencies, fixes serial-port access and opens the GUI on Linux Mint / Ubuntu.</p></div>
+</div>
+
+<h2>What does not exist yet</h2>
+<p class="note">No ESP32 firmware, no Klipper firmware fork with a segment queue, no web UI, and nothing that moves a motor or heats a nozzle. This is groundwork only.</p>
+
+<h2>Try it</h2>
+<pre><code>git clone https://github.com/The-Dorkknight/esp-printhost
+cd esp-printhost
+sudo python3 printhost.py</code></pre>
+<p>Linux only for the probe. See the README for what the setup command changes on your system.</p>
+
+<footer>
+  <p><strong>No warranty, no liability.</strong> Provided as is, use at your own risk. Not affiliated with Klipper, FluidNC or Marlin.</p>
+  <p>Licensed under GPL-3.0. Copyright (C) 2026 Matthew Armstrong (<a href="https://github.com/The-Dorkknight">The-Dorkknight</a>).</p>
+</footer>
+</div>
+<script>
+// Keep links correct if the repo is renamed or forked (project pages live at <owner>.github.io/<repo>/).
+(function(){
+  try{
+    var o="The-Dorkknight",r="esp-printhost",h=location.hostname;
+    if(/\.github\.io$/.test(h)){o=h.split(".")[0];var p=location.pathname.split("/").filter(Boolean)[0];if(p)r=p;}
+    var base="https://github.com/"+o+"/"+r;
+    document.getElementById("repo").href=base;
+    document.getElementById("rel").href=base+"/releases";
+    document.getElementById("docs").href=base+"/blob/main/docs/DESIGN.md";
+  }catch(e){}
+})();
+</script>
+</body>
+</html>

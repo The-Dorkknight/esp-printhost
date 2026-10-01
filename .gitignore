@@ -1,0 +1,11 @@
+build/
+*.o
+__pycache__/
+*.pyc
+.venv/
+*.log
+esp-printhost-logs/
+.DS_Store
+.idea/
+.vscode/
+*.swp

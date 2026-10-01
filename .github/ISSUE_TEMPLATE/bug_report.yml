@@ -1,0 +1,32 @@
+name: Bug report
+description: Something did not work (this is a work-in-progress proof of concept)
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `python3 printhost.py --version`
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and version (e.g. Linux Mint 22), and the board you tested (e.g. BTT SKR Pico, Klipper v0.10.0)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log or output
+      description: Paste the GUI output or the log file from `~/esp-printhost-logs/`
+      render: text
+    validations:
+      required: true
