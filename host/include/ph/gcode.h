@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 // Minimal G-code line parser.
 #pragma once
+#include <map>
 #include <string>
 
 namespace ph {
@@ -26,5 +27,10 @@ struct GLine {
 
 // Returns false only for malformed words (e.g. "G1 X1.2.3").
 bool gcode_parse(const std::string& line, GLine& out);
+
+// Klipper-style extended command: "SET_LED LED=board RED=0.5". The name is upper-cased; parameter
+// names are upper-cased, values kept as written. Returns false if the line has no command name or
+// a parameter without '='.
+bool gcode_parse_ext(const std::string& line, std::string& name, std::map<std::string, std::string>& params);
 
 }  // namespace ph

@@ -3,77 +3,85 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>esp-printhost</title>
-<meta name="description" content="Work-in-progress proof of concept: a WiFi brain for old 3D printers, starting with a tested C++ Klipper protocol library and PC probe tools. GPL-3.0.">
+<title>Skipper Flipper</title>
+<meta name="description" content="Work-in-progress proof of concept: an experimental ESP32 pseudo Klipper port for old 3D printers. Tested planner and segment-queue core, compile-tested firmware, PC tools. GPL-3.0.">
 <link rel="icon" href="images/favicon-64.png">
 <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
 <style>
-:root{--bg:#f6f8f9;--fg:#14262e;--mut:#4c616b;--card:#fff;--bd:#d5dee2;--acc:#123440;--warn:#fff3cd;--warnfg:#5c4400;--warnbd:#e0c35a}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1b21;--fg:#e6eef1;--mut:#9db2bb;--card:#16272f;--bd:#27414c;--acc:#7cc4d8;--warn:#3a3000;--warnfg:#ffe9a0;--warnbd:#8a7100}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-.wrap{max-width:900px;margin:0 auto;padding:0 16px}
-.banner{background:var(--warn);color:var(--warnfg);border-bottom:2px solid var(--warnbd);text-align:center;padding:10px 16px;font-weight:700}
-header{display:flex;gap:20px;align-items:center;padding:32px 0 8px;flex-wrap:wrap}
-header img{width:96px;height:96px;border-radius:20px}
-h1{margin:0;font-size:2rem}h2{margin:32px 0 8px}
+:root{--bg:#e9e6dc;--fg:#141414;--mut:#555;--card:#f7f5ee;--ink:#141414;--paper:#e9e6dc}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#1b1b19;--fg:#ece9de;--mut:#aaa89e;--card:#262623;--ink:#ece9de;--paper:#1b1b19}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 Georgia,"Times New Roman",serif}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.07;z-index:5;
+ background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1.4 -.2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
+.wrap{max-width:920px;margin:0 auto;padding:0 16px}
+h1,h2,h3,.btn,.title{font-family:"Chewy","Bangers","Comic Sans MS","Trebuchet MS",Impact,sans-serif;letter-spacing:.02em}
+.card-title{background:var(--ink);color:var(--paper);text-align:center;padding:14px 16px;font-family:Georgia,serif;font-weight:700;letter-spacing:.08em;text-transform:uppercase;border-bottom:4px double var(--paper);outline:3px solid var(--ink);outline-offset:-9px}
+.strip{height:18px;background:var(--ink);background-image:radial-gradient(circle,var(--paper) 0 4px,transparent 5px);background-size:24px 18px;background-position:12px 0}
+.hero{display:block;width:100%;height:auto;border:4px solid var(--ink);margin:20px 0 6px;animation:jitter .5s steps(4) infinite}
+@keyframes jitter{0%{transform:translate(0,0)}25%{transform:translate(1px,0)}50%{transform:translate(0,1px)}75%{transform:translate(-1px,0)}100%{transform:translate(0,0)}}
+@media (prefers-reduced-motion:reduce){.hero{animation:none}}
+h2{font-size:1.9rem;margin:36px 0 8px;border-bottom:4px solid var(--ink);display:inline-block}
 .lead{color:var(--mut);margin:4px 0 0}
-.btns{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
-.btn{display:inline-block;padding:9px 16px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);text-decoration:none;font-weight:600}
-.btn.p{background:var(--acc);color:var(--bg);border-color:var(--acc)}
-.shot{width:100%;height:auto;border:1px solid var(--bd);border-radius:10px;margin:8px 0}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px}
-.card h3{margin:0 0 4px;font-size:1.05rem}.card p{margin:0;color:var(--mut)}
-pre{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:12px;overflow:auto}
+.btns{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}
+.btn{display:inline-block;padding:9px 18px;border:3px solid var(--ink);background:var(--card);color:var(--fg);text-decoration:none;font-size:1.1rem;box-shadow:4px 4px 0 var(--ink)}
+.btn.p{background:var(--ink);color:var(--paper)}
+.btn:hover{background:var(--ink);color:var(--paper)}
+.btn.p:hover{background:var(--card);color:var(--fg)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.card{background:var(--card);border:3px solid var(--ink);box-shadow:5px 5px 0 var(--ink);padding:14px}
+.card h3{margin:0 0 4px;font-size:1.25rem}.card p{margin:0;color:var(--mut)}
+.shot{width:100%;height:auto;border:3px solid var(--ink);margin:10px 0}
+pre{background:var(--card);border:3px solid var(--ink);padding:12px;overflow:auto}
 code{font-family:ui-monospace,Menlo,Consolas,monospace}
-.note{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--warnbd);border-radius:8px;padding:10px 14px}
-footer{margin:40px 0;color:var(--mut);font-size:.9rem;border-top:1px solid var(--bd);padding-top:16px}
-a{color:var(--acc)}
+.note{background:var(--card);border:3px solid var(--ink);border-left-width:12px;padding:10px 14px}
+table{border-collapse:collapse;width:100%;background:var(--card)}
+td,th{border:2px solid var(--ink);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--ink);color:var(--paper)}
+footer{margin:40px 0 24px;color:var(--mut);font-size:.9rem;border-top:4px double var(--ink);padding-top:16px}
+a{color:var(--fg)}
 </style>
 </head>
 <body>
-<div class="banner">WORK IN PROGRESS: MANY FEATURES MAY BE BROKEN. Proof of concept, 0.1.0-wip.</div>
+<div class="card-title">Work in progress: many features may be broken. Proof of concept, 0.1.0-wip.</div>
+<div class="strip"></div>
 <div class="wrap">
-<header>
-  <img src="images/icon-512.png" alt="esp-printhost icon">
-  <div>
-    <h1>esp-printhost</h1>
-    <p class="lead">A WiFi "brain" for old 3D printers. Today: a tested C++ Klipper protocol library and PC tools. Slow-moving hobby project.</p>
-  </div>
-</header>
+<img class="hero" src="images/skipper-flipper.webp" width="1408" height="768" alt="Skipper Flipper: an experimental ESP32 pseudo Klipper port. A cartoon dolphin in a captain's hat steers a 3D-printed paddle boat.">
+<p class="lead">A WiFi "brain" for old 3D printers. <strong>Mostly working, needs tuning and proper testing:</strong> installed in a WEEDO Tina 2 with a BTT SKR Pico, it heats, PID-tunes, runs the motors and TMC2209 drivers and triggers stallGuard from a phone. Printing a file has only run in simulation so far.</p>
 <div class="btns">
   <a class="btn p" id="repo" href="https://github.com/The-Dorkknight/esp-printhost">View on GitHub</a>
   <a class="btn" id="rel" href="https://github.com/The-Dorkknight/esp-printhost/releases">Releases</a>
   <a class="btn" id="docs" href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/DESIGN.md">Design notes</a>
 </div>
 
-<img class="shot" src="images/gui-probe.webp" alt="esp-printhost GUI running the probe against the simulated board" width="900" height="680">
-<p class="lead">The GUI talking to the built-in <em>simulated</em> board (no hardware in this screenshot).</p>
-
-<h2>What works today</h2>
+<h2>What works today (WEEDO Tina 2 + SKR Pico + ESP32-S3)</h2>
 <div class="cards">
-  <div class="card"><h3>Klipper protocol in C++</h3><p>CRC16, variable-length ints, framing, resync and the board's data dictionary. 122 unit tests.</p></div>
-  <div class="card"><h3>Probe a real board</h3><p>Identify it, list its pins, reset it, toggle one pin. Tried on a BTT SKR Pico (RP2040).</p></div>
-  <div class="card"><h3>No hardware needed</h3><p>A fake board speaks the same protocol so you can try everything on a laptop.</p></div>
-  <div class="card"><h3>One-command setup</h3><p>Installs dependencies, fixes serial-port access and opens the GUI on Linux Mint / Ubuntu.</p></div>
+  <div class="card"><h3>Heating, with Klipper's safety</h3><p>Thermistors, heater PWM, PID tuning, the heater test and the safety shutdowns all work on real hardware. Needs proper testing over longer runs.</p></div>
+  <div class="card"><h3>Motors and TMC2209</h3><p>Motor tests turn the motors, every TMC2209 answers, and stallGuard triggers. The threshold, motor current, speeds and rotation_distance still need tuning (there are boxes for that on the Test bench).</p></div>
+  <div class="card"><h3>Fans</h3><p>The hotend fan is confirmed working. The part-cooling fan and the third fan output have not run yet: possibly a broken wire. Will update when tested.</p></div>
+  <div class="card"><h3>Klipper link and phone UI</h3><p>The ESP32-S3 identifies, configures and clock-syncs the board over four jumper wires, recovers from board power cycles, and serves the status page, console, printer.cfg editor, Test bench and Printer page from its own WiFi.</p></div>
+  <div class="card"><h3>Simulated only</h3><p>Moves, full homing and probing, and printing an uploaded G-code file: tested against a simulated board and in 1,000+ unit checks, not yet on the printer.</p></div>
+  <div class="card"><h3>Flasher window</h3><p>Slave (printer board) and Master (ESP32-S3 only) tabs, firmware for every listed board shipped ready to flash. The SKR Pico and ESP32-S3 paths are used on real hardware; the other boards are compile-only.</p></div>
 </div>
+<img class="shot" src="images/flasher-slave.webp" width="1000" height="760" alt="The Flasher window, Slave tab, with the BTT SKR Pico (UART) firmware selected, marked hardware-tested">
+<p class="lead">The Flasher, Slave tab, with the SKR Pico firmware that runs in the Tina 2.</p>
 
-<h2>What does not exist yet</h2>
-<p class="note">No ESP32 firmware, no Klipper firmware fork with a segment queue, no web UI, and nothing that moves a motor or heats a nozzle. This is groundwork only.</p>
+<h2>Still to do</h2>
+<p class="note">Tuning (stallGuard, motor current, speeds, rotation_distance), proper long-run testing, a first real print, the remaining fans, and SD-card support for big G-code files. The whole story, every mistake included, is in the paper <a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/paper/A_FRANKENSTEIN_EXPERIENCE.md">A Frankenstein Experience</a> (<a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/paper/A_FRANKENSTEIN_EXPERIENCE.pdf">PDF</a>). Real-hardware results, dated: <a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/HARDWARE_LOG.md">hardware log</a>.</p>
 
 <h2>Try it</h2>
 <pre><code>git clone https://github.com/The-Dorkknight/esp-printhost
 cd esp-printhost
 sudo python3 printhost.py</code></pre>
-<p>Linux only for the probe. See the README for what the setup command changes on your system.</p>
+<p>Linux only for the probe and the one-command setup. The README lists exactly what the setup command changes on your system, and why wrong firmware can leave a board unresponsive until re-flashed.</p>
 
 <footer>
   <p><strong>No warranty, no liability.</strong> Provided as is, use at your own risk. Not affiliated with Klipper, FluidNC or Marlin.</p>
   <p>Licensed under GPL-3.0. Copyright (C) 2026 Matthew Armstrong (<a href="https://github.com/The-Dorkknight">The-Dorkknight</a>).</p>
 </footer>
 </div>
+<div class="strip"></div>
 <script>
-// Keep links correct if the repo is renamed or forked (project pages live at <owner>.github.io/<repo>/).
 (function(){
   try{
     var o="The-Dorkknight",r="esp-printhost",h=location.hostname;

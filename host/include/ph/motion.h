@@ -9,9 +9,10 @@ namespace ph {
 
 enum Axis { AX_X = 0, AX_Y, AX_Z, AX_E, NUM_AXES };
 
-// A segment as sent to the MCU (see docs/PROTOCOL.md, segq_push).
+// A segment as sent to the MCU (see docs/PROTOCOL.md, segq_push). Rules enforced
+// by the MCU: 1 <= n <= 2^30 and 2*|steps[axis]| <= n.
 struct Segment {
-    uint32_t ticks = 0;             // duration in MCU clock ticks
+    uint32_t n = 0;                 // duration in DDA ticks (see firmware/skipper/segq_core.h)
     int32_t  steps[NUM_AXES] = {};  // signed step counts
     uint8_t  flags = 0;             // SEG_SYNC | SEG_LAST
     uint16_t tag = 0;

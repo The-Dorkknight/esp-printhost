@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 Matthew Armstrong (https://github.com/The-Dorkknight)
 # SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
-"""esp-printhost tool panel: one window for fake_mcu.py and mcu_probe.
+"""Skipper Flipper (esp-printhost) tool panel: one window for fake_mcu.py and mcu_probe.
 
     python3 tools/printhost_gui.py
 
@@ -25,8 +25,11 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import skipper_theme as theme
+
+
 __version__ = "0.1.0-wip"
-__build_date__ = "2026-10-01 20:05"
+__build_date__ = "2026-10-03 10:00"
 WIP_NOTICE = "WORK IN PROGRESS: PROOF OF CONCEPT, MANY FEATURES MAY BE BROKEN"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,17 +59,25 @@ class Proc:
 
     def __init__(self, tag, argv, outq, cwd=None):
         self.tag, self.argv, self.outq = tag, argv, outq
-        self.p = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+        extra = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+        # utf-8 + replace: a Windows console codepage must not kill the reader thread
+        self.p = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, env=env,
                                   stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                  text=True, bufsize=1)
+                                  text=True, encoding="utf-8", errors="replace", bufsize=1, **extra)
         threading.Thread(target=self._pump, daemon=True).start()
 
     def _pump(self):
-        for line in self.p.stdout:
-            self.outq.put((self.tag, line.rstrip("\n")))
-        code = self.p.wait()
-        self.outq.put((self.tag, None if code == 0 else f"exited with code {code}"))
-        self.outq.put(("_done", self.tag))
+        code = -1
+        try:
+            for line in self.p.stdout:
+                self.outq.put((self.tag, line.rstrip("\n")))
+            code = self.p.wait()
+        except Exception as e:   # noqa: BLE001 - always report "done" so the GUI never stays disabled
+            self.outq.put((self.tag, f"output reader failed: {e}"))
+        finally:
+            self.outq.put((self.tag, None if code == 0 else f"exited with code {code}"))
+            self.outq.put(("_done", self.tag))
 
     def running(self):
         return self.p.poll() is None
@@ -88,9 +99,11 @@ class App:
         self.fake_dev = None
         self.log_fp = None
 
-        root.title(f"esp-printhost tools {__version__} (Built {__build_date__})")
-        root.geometry("900x620")
-        root.minsize(700, 450)
+        root.title(f"Skipper Flipper tools {__version__} (Built {__build_date__})")
+        root.geometry("980x780")
+        root.minsize(820, 560)
+        self.fonts = theme.apply(root)
+        theme.set_icon(root)
         self._build_ui()
         self.refresh_ports()
         self.info(f"host dir: {HOST_DIR}")
@@ -102,9 +115,17 @@ class App:
     # ---------------- UI ----------------
     def _build_ui(self):
         pad = dict(padx=6, pady=4)
-        top = ttk.Frame(self.root)
-        top.pack(fill="x", **pad)
-
+        theme.FilmStrip(self.root).pack(fill="x")
+        self.header = theme.make_header(
+            self.root, self.fonts, "TOOLS", [
+                "Developer tools: probe a Klipper board over USB, run a simulated one, build and test.",
+                "Building and flashing firmware: use flasher.py (Slave and Master tabs).",
+            ], badge=WIP_NOTICE)
+        self.header.pack(fill="x")
+        self.nb = ttk.Notebook(self.root)
+        self.nb.pack(fill="x", **pad)
+        top = ttk.Frame(self.nb)
+        self.nb.add(top, text="Probe")
         # Tools / build
         tf = ttk.LabelFrame(top, text="Tools")
         tf.pack(fill="x", **pad)
@@ -149,7 +170,7 @@ class App:
         self.blink_pin = tk.StringVar(value="")
         self.pin_box = ttk.Combobox(pf, textvariable=self.blink_pin, width=12)
         self.pin_box.grid(row=1, column=1, sticky="w", **pad)
-        ttk.Label(pf, text="(run once to list pins)", foreground="#888").grid(
+        ttk.Label(pf, text="(run once to list pins)", style="Muted.TLabel").grid(
             row=2, column=1, columnspan=3, sticky="w", padx=6)
         self.run_btn = ttk.Button(pf, text="Run probe", command=self.run_probe)
         self.run_btn.grid(row=1, column=3, **pad)
@@ -161,42 +182,41 @@ class App:
         of.pack(fill="both", expand=True, **pad)
         bar = ttk.Frame(of)
         bar.pack(fill="x")
-        ttk.Button(bar, text="Copy all", command=self.copy_all).pack(side="left", **pad)
-        ttk.Button(bar, text="Copy selection", command=self.copy_sel).pack(side="left", **pad)
-        ttk.Button(bar, text="Clear", command=self.clear).pack(side="left", **pad)
-        ttk.Button(bar, text="Save as…", command=self.save_as).pack(side="left", **pad)
+        ttk.Button(bar, style="Small.TButton", text="Copy all", command=self.copy_all).pack(side="left", **pad)
+        ttk.Button(bar, style="Small.TButton", text="Copy selection", command=self.copy_sel).pack(side="left", **pad)
+        ttk.Button(bar, style="Small.TButton", text="Clear", command=self.clear).pack(side="left", **pad)
+        ttk.Button(bar, style="Small.TButton", text="Save as…", command=self.save_as).pack(side="left", **pad)
         self.autoscroll = tk.BooleanVar(value=True)
         ttk.Checkbutton(bar, text="Auto-scroll", variable=self.autoscroll).pack(side="left", **pad)
 
         self.log_on = tk.BooleanVar(value=True)
         self.log_path = tk.StringVar(value=self._default_log_path())
-        ttk.Button(bar, text="Open log folder", command=self.open_log_dir).pack(side="right", **pad)
-        ttk.Button(bar, text="…", width=2, command=self.browse_log).pack(side="right")
-        ttk.Entry(bar, textvariable=self.log_path, width=34).pack(side="right", **pad)
-        ttk.Checkbutton(bar, text="Log to file", variable=self.log_on,
-                        command=self._log_toggled).pack(side="right")
+        ttk.Checkbutton(bar, text="Log", variable=self.log_on,
+                        command=self._log_toggled).pack(side="left", **pad)
+        ttk.Button(bar, style="Small.TButton", text="Open log folder", command=self.open_log_dir).pack(side="right", **pad)
+        ttk.Button(bar, style="Small.TButton", text="…", width=2, command=self.browse_log).pack(side="right")
+        ttk.Entry(bar, textvariable=self.log_path, width=10).pack(side="right", **pad)
 
         body = ttk.Frame(of)
         body.pack(fill="both", expand=True)
-        self.text = tk.Text(body, wrap="none", font=("DejaVu Sans Mono", 10), undo=False)
+        self.text = tk.Text(body, wrap="none", undo=False)
         ys = ttk.Scrollbar(body, orient="vertical", command=self.text.yview)
         xs = ttk.Scrollbar(of, orient="horizontal", command=self.text.xview)
         self.text.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
         self.text.pack(side="left", fill="both", expand=True)
         ys.pack(side="right", fill="y")
         xs.pack(side="bottom", fill="x", before=body)
-        for tag, colour in (("fake", "#7a4ec9"), ("probe", "#1565c0"), ("build", "#5d6d00"),
-                            ("app", "#555555"), ("err", "#c62828"), ("hint", "#e65100"),
-                            ("ts", "#999999")):
-            self.text.tag_configure(tag, foreground=colour)
+        theme.style_text(self.text, self.fonts)
         self._make_readonly_selectable(self.text)
 
+        strip = theme.FilmStrip(self.root)
+        strip.pack(side="bottom", fill="x", before=of)
         sb = ttk.Frame(self.root)
-        sb.pack(side="bottom", fill="x", padx=8, pady=(0, 4), before=of)
-        self.status = ttk.Label(sb, text="", anchor="w")
+        sb.pack(side="bottom", fill="x", padx=8, pady=(2, 4), before=strip)
+        self.status = ttk.Label(sb, text="", anchor="w", style="Status.TLabel")
         self.status.pack(side="left", fill="x", expand=True)
         ttk.Label(sb, text=f"v{__version__} \u2022 {__build_date__} \u2022 WIP / proof of concept",
-                  foreground="#c62828").pack(side="right")
+                  style="Version.TLabel").pack(side="right")
 
     def _make_readonly_selectable(self, t):
         """Block edits but keep selection, copy and navigation working."""
@@ -441,13 +461,9 @@ class App:
 
 def main():
     if "--version" in sys.argv[1:]:
-        print(f"esp-printhost tools {__version__} (built {__build_date__}) - {WIP_NOTICE}")
+        print(f"Skipper Flipper tools {__version__} (built {__build_date__}) - {WIP_NOTICE}")
         return
     root = tk.Tk()
-    try:
-        ttk.Style().theme_use("clam")
-    except tk.TclError:
-        pass
     App(root)
     root.mainloop()
 

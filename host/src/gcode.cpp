@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Matthew Armstrong (https://github.com/The-Dorkknight)
 // SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 #include "ph/gcode.h"
+
 #include <cctype>
+#include <vector>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -72,6 +74,36 @@ bool gcode_parse(const std::string& raw, GLine& g) {
         int i = GLine::idx(L);
         g.seen_[i] = true;
         g.val_[i] = has_num ? float(v) : 0.f;
+    }
+    return true;
+}
+
+}  // namespace ph
+
+namespace ph {
+
+bool gcode_parse_ext(const std::string& line, std::string& name, std::map<std::string, std::string>& params) {
+    std::string l = line.substr(0, line.find_first_of(";#"));   // strip comments
+    std::vector<std::string> words;
+    std::string w;
+    for (char c : l) {
+        if (isspace((unsigned char)c)) {
+            if (!w.empty()) words.push_back(w), w.clear();
+        } else {
+            w += c;
+        }
+    }
+    if (!w.empty()) words.push_back(w);
+    if (words.empty()) return false;
+    name = words[0];
+    for (auto& c : name) c = char(toupper((unsigned char)c));
+    params.clear();
+    for (size_t i = 1; i < words.size(); i++) {
+        auto eq = words[i].find('=');
+        if (eq == std::string::npos || eq == 0) return false;
+        std::string k = words[i].substr(0, eq);
+        for (auto& c : k) c = char(toupper((unsigned char)c));
+        params[k] = words[i].substr(eq + 1);
     }
     return true;
 }

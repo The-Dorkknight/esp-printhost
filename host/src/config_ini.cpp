@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
+#include <vector>
 
 namespace ph {
 namespace {
@@ -174,6 +175,62 @@ bool ConfigSection::getb(const std::string& k, bool d) const {
     if (s == "0" || s == "false" || s == "no" || s == "off") return false;
     error("'" + k + "' must be true/false (line " + std::to_string(v->line) + ")");
     return d;
+}
+
+std::string config_set_option(const std::string& text, const std::string& section, const std::string& key,
+                              const std::string& value) {
+    std::vector<std::string> lines;
+    {
+        std::istringstream in(text);
+        std::string l;
+        while (std::getline(in, l)) lines.push_back(l);
+    }
+    auto norm_section = [](const std::string& raw) -> std::string {
+        std::string t = trim(strip_comment(raw));
+        if (t.size() < 2 || t.front() != '[' || t.back() != ']') return "";
+        std::istringstream ns(lower(trim(t.substr(1, t.size() - 2))));
+        std::string w, n;
+        while (ns >> w) n += (n.empty() ? "" : " ") + w;
+        return n;
+    };
+    std::string want = lower(section), wkey = lower(key), newline = key + ": " + value;
+    int start = -1, end = int(lines.size());
+    for (size_t i = 0; i < lines.size(); i++) {
+        if (lines[i].rfind("#*#", 0) == 0) {
+            if (start >= 0 && end == int(lines.size())) end = int(i);
+            break;
+        }
+        std::string n = norm_section(lines[i]);
+        if (n.empty()) continue;
+        if (start >= 0) {
+            end = int(i);
+            break;
+        }
+        if (n == want) start = int(i);
+    }
+    if (start < 0) {
+        std::string out = text;
+        if (!out.empty() && out.back() != '\n') out += "\n";
+        return out + "\n[" + section + "]\n" + newline + "\n";
+    }
+    int last_content = start;
+    for (int i = start + 1; i < end; i++) {
+        std::string t = trim(strip_comment(lines[size_t(i)]));
+        if (t.empty()) continue;
+        last_content = i;
+        if (isspace((unsigned char)lines[size_t(i)][0])) continue;   // continuation line
+        size_t sep = t.find_first_of(":=");
+        if (sep != std::string::npos && lower(trim(t.substr(0, sep))) == wkey) {
+            lines[size_t(i)] = newline;
+            std::string out;
+            for (auto& l : lines) out += l + "\n";
+            return out;
+        }
+    }
+    lines.insert(lines.begin() + last_content + 1, newline);
+    std::string out;
+    for (auto& l : lines) out += l + "\n";
+    return out;
 }
 
 }  // namespace ph

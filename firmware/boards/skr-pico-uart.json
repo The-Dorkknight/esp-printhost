@@ -1,0 +1,25 @@
+{
+  "id": "skr-pico-uart",
+  "title": "BTT SKR Pico (RP2040, serial UART0, for the ESP32-S3)",
+  "description": "BIGTREETECH SKR Pico v1.0 with Klipper talking over its UART0 (GPIO0 TX, GPIO1 RX) at 250000 baud instead of USB, so an ESP32-S3 can be wired to it. Flash by copying a .uf2 to the RPI-RP2 drive.",
+  "mcu_arch": "rp2040",
+  "flash_method": "uf2-copy",
+  "dda_hz": 40000,
+  "dda_note": "RP2040 runs Klipper at a 12 MHz timer clock (CLOCK_FREQ from the built .config). 40 kHz DDA = 300 clock ticks per tick; max 20,000 steps/s per axis (2*|steps| <= n), i.e. 250 mm/s at 80 steps/mm. ISR cost is unmeasured.",
+  "notes": [
+    "Hardware-tested on 2026-10-11 for the link and the on-board NeoPixel only: the shipped build answered an ESP32-S3 over UART0 and its RGB LED changed colour on command. Motion, the segment queue and other pins have NOT been tested. See docs/HARDWARE_LOG.md.",
+    "This firmware does NOT talk over USB. To go back to USB, flash the skr-pico preset again (BOOTSEL + copy).",
+    "BOOTSEL: hold the boot button while plugging USB in (or tap RESET while holding it); a drive named RPI-RP2 appears.",
+    "Check the TX0/RX0/5V/GND positions on BTT's SKR Pico pinout diagram before wiring; this preset only names the RP2040 pins.",
+    "UNVERIFIED: whether your particular SKR Pico revision has a W25Q080 flash chip; this follows Klipper's own SKR Pico config header and defaults."
+  ],
+  "status": "hardware-tested",
+  "sources": [
+    "Klipper v0.13.0 config/generic-bigtreetech-skr-pico-v1.0.cfg (header comments: RP2040, USB, copy out/klipper.uf2 in boot mode)",
+    "Klipper v0.13.0 src/rp2040/Kconfig (option names, defaults)",
+    "BIGTREETECH SKR-Pico Klipper/README.md (UART: \"Communication Interface: UART0 on GPIO0/GPIO1\"; Pi powered from the board +5V)",
+    "RP2040 datasheet function table: GPIO0 = UART0 TX, GPIO1 = UART0 RX"
+  ],
+  "serial_uart": "UART0 on GPIO0 (TX) / GPIO1 (RX), 250000 baud. Wire SKR Pico TX0 to the ESP32-S3 RX GPIO, SKR Pico RX0 to the ESP32-S3 TX GPIO, and GND to GND. BTT's guide powers a Raspberry Pi from the board's +5V on the same wiring, so the ESP32-S3 5V pin can be fed from there (do not also power the ESP32-S3 over USB at the same time).",
+  "tested_on": "2026-10-11, the author: BTT SKR Pico with the shipped build, wired to an ESP32-S3 over UART0. Tested: identify, data dictionary, get_config, Klipper-style config with the on-board NeoPixel (gpio24) switching colour. Not tested: other pins, motion, the segment queue."
+}

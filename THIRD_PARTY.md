@@ -7,7 +7,13 @@ The GPL-3.0 licence in this repository covers Matthew Armstrong's code only. Eve
 | **Klipper** (MCU firmware and `msgproto` protocol) | The wire format, data-dictionary layout and command names were learned from Klipper's source and implemented independently in C++. A future firmware fork would be a derivative work. | GPL-3.0, <https://github.com/Klipper3d/klipper> |
 | **FluidNC** | Planned donor for the ESP32 side; no FluidNC code is in this repository yet. | GPL-3.0, <https://github.com/bdring/FluidNC> |
 | **Marlin** | Inspiration for the pressure-advance idea; no code copied. | GPL-3.0, <https://github.com/MarlinFirmware/Marlin> |
+| **Klipper v0.13.0** (downloaded at build time, not included in this repo) | The Firmware tab clones it from GitHub and overlays our `segq` files; the resulting firmware is a GPL-3.0 derivative. | GPL-3.0, <https://github.com/Klipper3d/klipper> |
+| **ESP-IDF v5.4.1** (not included; downloaded to build) | The ESP32-S3 firmware is built with it, and the shipped image contains compiled ESP-IDF code and its components (FreeRTOS, lwIP, mbedTLS, wpa_supplicant and others, each under its own licence). | Apache-2.0 and the component licences listed in ESP-IDF, <https://github.com/espressif/esp-idf> |
+| **dns_server** (ESP-IDF captive-portal example) | Copied unchanged into `firmware/esp32s3/components/dns_server` and built into the ESP32-S3 firmware. | Unlicense OR CC0-1.0 (SPDX headers in the files) |
+| **esptool** | The Master tab installs it from PyPI into a private virtualenv and runs it; it is not included. | GPL-2.0-or-later, <https://github.com/espressif/esptool> |
 | **zlib** | Linked by `mcu_probe` (system library) to unpack the board's data dictionary. | zlib licence, <https://zlib.net> |
 | **Tk / Python** | The GUI uses the Python standard library and tkinter. | PSF licence |
 
 Licences are linked, not reproduced. Check each project for its current terms.
+
+Artwork (`docs/images/skipper-flipper.webp`, `host/tools/assets/art.png`) was supplied by the project author. The look borrows only the visual style of 1928 black-and-white cartoons, no characters.

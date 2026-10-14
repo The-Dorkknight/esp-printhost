@@ -1,0 +1,36 @@
+{
+  "id": "ramps-mega2560",
+  "title": "RAMPS on Arduino Mega 2560 (ATmega2560)",
+  "description": "RAMPS 1.3/1.4/1.6 shield on an Arduino Mega 2560: ATmega2560 at 16 MHz, serial 250000 baud over the Mega's USB-serial chip, flashed with avrdude (wiring/STK500v2 bootloader).",
+  "mcu_arch": "avr",
+  "flash_method": "avrdude",
+  "dda_hz": 10000,
+  "dda_note": "ATmega2560 at 16 MHz. 10 kHz DDA = 1600 clock ticks per tick; max 5,000 steps/s per axis, i.e. 62 mm/s at 80 steps/mm. Deliberately conservative: the 8-bit per-tick work (4-axis 32-bit Bresenham) was not timed on hardware.",
+  "serial_usb": "USB-serial via the Mega's ATmega16U2 as /dev/ttyACM0, 250000 baud.",
+  "avrdude": {
+    "part": "atmega2560",
+    "programmer": "wiring"
+  },
+  "notes": [
+    "Compile-only: built in a sandbox with Klipper v0.13.0; never flashed or run on this board by the author.",
+    "avrdude flags copy Klipper's src/avr/Makefile flash rule: -p<mcu> -c<protocol> -P<port> -D -Uflash:w:<hex>:i (protocol 'wiring' for atmega2560 per src/avr/Kconfig).",
+    "Close anything using the serial port (Klipper, Cura, a monitor) before flashing."
+  ],
+  "status": "compile-only",
+  "build_sizes": {
+    "segq_off": {
+      "flash_bytes": 36272,
+      "ram_static_bytes": 418
+    },
+    "segq_on": {
+      "flash_bytes": 39774,
+      "ram_static_bytes": 418
+    },
+    "flash_delta_bytes": 3502,
+    "note": "Klipper v0.13.0, arm-none-eabi/avr gcc from Ubuntu apt, sandbox build. RAM = static data+bss only; the segment queue itself is allocated at run time (depth * sizeof(segment): 24 bytes ARM, 23 bytes AVR)."
+  },
+  "sources": [
+    "Klipper v0.13.0 config/generic-ramps.cfg (header: AVR atmega2560)",
+    "Klipper v0.13.0 src/avr/Kconfig (AVRDUDE_PROTOCOL) and src/avr/Makefile (flash rule)"
+  ]
+}

@@ -211,9 +211,22 @@ bool MsgProto::encode(const std::string& cmdline, Bytes& out,
         if (it == args.end()) return set_err(err, f->name + ": missing " + p.name);
         const std::string& s = it->second;
         if (is_bytes(p.type)) {
-            if (s.size() > 255) return set_err(err, "string too long");
-            out.push_back(uint8_t(s.size()));
-            out.insert(out.end(), s.begin(), s.end());
+            Bytes b;
+            if (s.compare(0, 4, "hex:") == 0) {   // binary data: data=hex:ff0010
+                if ((s.size() - 4) % 2) return set_err(err, f->name + ": odd hex length in " + p.name);
+                for (size_t k = 4; k < s.size(); k += 2) {
+                    char hx[3] = {s[k], s[k + 1], 0};
+                    char* end = nullptr;
+                    long byte = strtol(hx, &end, 16);
+                    if (*end) return set_err(err, f->name + ": bad hex in " + p.name);
+                    b.push_back(uint8_t(byte));
+                }
+            } else {
+                b.assign(s.begin(), s.end());
+            }
+            if (b.size() > 255) return set_err(err, "string too long");
+            out.push_back(uint8_t(b.size()));
+            out.insert(out.end(), b.begin(), b.end());
             continue;
         }
         int64_t v;

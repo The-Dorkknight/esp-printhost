@@ -1,0 +1,18 @@
+# Skipper Flipper ESP32-S3 firmware (work in progress). Compile-tested only.
+CONFIG_IDF_TARGET="esp32s3"
+# 2 MB is safe on every ESP32-S3 module; a larger chip simply leaves the rest unused.
+CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# Console on the chip's native USB port (shows up as an "Espressif USB JTAG/serial debug unit")
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+# No colour escape codes: the log is also shown on a web page
+CONFIG_LOG_COLORS=n
+# Captive portal: phones send long headers and open many sockets
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_LWIP_MAX_SOCKETS=16
+# Stop with a clear "stack overflow" message the moment any task runs off the end of its stack,
+# instead of silently corrupting the memory below it.
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y

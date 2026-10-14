@@ -13,6 +13,7 @@ Options:
     --clean         rebuild from scratch
     --check         only report what's installed / missing, change nothing
     --yes           answer "yes" to the optional fixes without asking
+    --no-firmware   skip the optional firmware toolchains (Firmware tab builds)
 
 What it does (Linux Mint / Ubuntu / Debian):
   1. apt installs only what's missing: build tools, cmake, zlib, python3-tk, acl
@@ -20,8 +21,11 @@ What it does (Linux Mint / Ubuntu / Debian):
      and adds you to 'dialout' for the long term
   3. tells ModemManager to leave printer boards alone
   4. offers to stop brltty grabbing CH340 USB-serial chips (Ender boards!)
-  5. builds mcu_probe + runs unit tests, as you (not root)
-  6. opens the GUI as you
+  5. optional: apt installs the firmware toolchains (ARM + AVR gcc, avrdude,
+     dfu-util, stm32flash; about 140 MB download) so the GUI's Firmware tab can
+     build Klipper-based firmware. Skip with --no-firmware.
+  6. builds mcu_probe + runs unit tests, as you (not root)
+  7. opens the GUI as you
 Everything is logged to ~/esp-printhost-logs/setup-<time>.log
 """
 import argparse
@@ -41,6 +45,11 @@ BUILD = os.path.join(HOST, "build")
 UDEV_RULE = "/etc/udev/rules.d/99-esp-printhost.rules"
 BRLTTY_OVERRIDE = "/etc/udev/rules.d/85-brltty.rules"
 APT_PKGS = ["build-essential", "cmake", "zlib1g-dev", "python3-tk", "acl"]
+# Optional: toolchains for host/tools/skipper_fw.py (build + flash MCU firmware).
+# Download is roughly 140 MB, about 1.1 GB installed (Ubuntu 24.04 package sizes).
+FW_PKGS = ["git", "gcc-arm-none-eabi", "binutils-arm-none-eabi", "libnewlib-arm-none-eabi",
+           "gcc-avr", "avr-libc", "binutils-avr", "dfu-util", "avrdude", "stm32flash"]
+FW_SIZE_NOTE = "about 140 MB to download, ~1.1 GB on disk"
 RULE_TEXT = """\
 # esp-printhost: let the logged-in user use USB-serial printer boards,
 # and keep ModemManager from probing them.
@@ -229,6 +238,36 @@ def step_brltty(auto_yes, check_only):
         warn("left alone — if your board doesn't show up, re-run and say yes")
 
 
+def step_firmware(auto_yes, check_only, skip):
+    step("4. Firmware toolchains (optional)")
+    if skip:
+        log("skipped (--no-firmware)")
+        return
+    missing = [p for p in FW_PKGS if not pkg_installed(p)]
+    for p in FW_PKGS:
+        (ok if p not in missing else warn)(f"{p}: {'installed' if p not in missing else 'not installed'}")
+    if not missing:
+        return
+    log("These are only needed to BUILD/FLASH board firmware from the Firmware tab; "
+        "the Probe tab does not need them.")
+    if check_only:
+        warn(f"not installed: {' '.join(missing)}  ({FW_SIZE_NOTE})")
+        return
+    if not ask(f"Install firmware toolchains ({FW_SIZE_NOTE})?", True, auto_yes):
+        log("skipped — re-run later without --no-firmware to add them")
+        return
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    cmd = ["apt-get", "install", "-y", "--no-install-recommends"] + missing
+    if run(cmd, env=env) != 0:
+        run(["apt-get", "update"], env=env, quiet=True)
+        if run(cmd, env=env) != 0:
+            # optional step: warn only, never block the GUI
+            warn(f"could not install: {' '.join(missing)} (Firmware tab will say what is missing)")
+            return
+    still = [p for p in missing if not pkg_installed(p)]
+    (warn if still else ok)(f"still missing: {' '.join(still)}" if still else "firmware toolchains installed")
+
+
 def fix_ownership(user):
     """Earlier root builds leave root-owned files; hand them back."""
     if os.geteuid() != 0 or user.pw_uid == 0 or not os.path.isdir(BUILD):
@@ -243,7 +282,7 @@ def fix_ownership(user):
 
 
 def step_build(user, clean, check_only):
-    step("4. Build mcu_probe + tests")
+    step("5. Build mcu_probe + tests")
     probe = os.path.join(BUILD, "mcu_probe")
     if check_only:
         (ok if os.path.exists(probe) else warn)(
@@ -291,7 +330,7 @@ def gui_env(user):
 
 
 def step_gui(user):
-    step("5. Launch GUI")
+    step("6. Launch GUI")
     gui = os.path.join(TOOLS, "printhost_gui.py")
     env = gui_env(user)
     cmd = [sys.executable, gui]
@@ -331,6 +370,8 @@ def main():
     ap.add_argument("--clean", action="store_true")
     ap.add_argument("--check", action="store_true", help="report only, change nothing")
     ap.add_argument("--yes", action="store_true", help="accept optional fixes")
+    ap.add_argument("--no-firmware", action="store_true",
+                    help="skip the optional firmware toolchains (ARM/AVR gcc, avrdude, ...)")
     a = ap.parse_args()
 
     if platform.system() != "Linux":
@@ -356,6 +397,7 @@ def main():
         step_packages(a.check)
         step_serial(user, a.check)
         step_brltty(a.yes, a.check)
+        step_firmware(a.yes, a.check, a.no_firmware)
         step_build(user, a.clean, a.check)
         if not a.no_gui and not a.check and not FAILS:
             step_gui(user)

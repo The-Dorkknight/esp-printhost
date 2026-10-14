@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Matthew Armstrong (https://github.com/The-Dorkknight)
 // SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 // PC unit tests. Build: see host/CMakeLists.txt  ->  ./ph_tests
+#include "check.h"
 #include "ph/config_ini.h"
 #include "ph/gcode.h"
 #include "ph/motion.h"
@@ -10,10 +11,7 @@
 #include <cstdio>
 #include <string>
 
-static int g_fail = 0, g_pass = 0;
-#define CHECK(c) do { if (c) g_pass++; else { g_fail++; \
-    printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
-#define NEAR(a, b, eps) CHECK(std::fabs((a) - (b)) <= (eps))
+int g_fail = 0, g_pass = 0;
 
 using namespace ph;
 
@@ -89,7 +87,7 @@ static const char* DICT = R"({
   "commands": {
     "get_uptime": 5,
     "config_digital_out oid=%c pin=%u value=%c default_value=%c max_duration=%u": 12,
-    "segq_push oid=%c ticks=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu": 40,
+    "segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu": 40,
     "debug_write order=%c addr=%u val=%u": 41,
     "set_name name=%s": 42
   },
@@ -131,7 +129,7 @@ static void test_msgproto() {
     CHECK(b == Bytes({12, 3, 11, 0, 0, 0}));
 
     b.clear();
-    CHECK(mp.encode("segq_push oid=1 ticks=160000 x=10 y=-3 z=0 e=-40 flags=1 tag=7", b));
+    CHECK(mp.encode("segq_push oid=1 n=160000 x=10 y=-3 z=0 e=-40 flags=1 tag=7", b));
     Bytes want; vlq_encode(want, 40); vlq_encode(want, 1); vlq_encode(want, 160000);
     vlq_encode(want, 10); vlq_encode(want, -3); vlq_encode(want, 0);
     vlq_encode(want, -40); vlq_encode(want, 1); vlq_encode(want, 7);
@@ -328,6 +326,15 @@ int main() {
     test_gcode();
     test_steps();
     test_pressure_advance();
+    test_segq_core();
+    test_engine();
+    test_kboard();
+    test_clocksync();
+    test_boardcfg();
+    test_thermistor();
+    test_temperature_sensors();
+    test_machine();
+    test_toolhead();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -20,13 +20,15 @@
 
 **`mcu_probe`** opens one serial port, asks the board to identify itself, reads its pin list and uptime. With `--blink` it configures one pin as an output and toggles it 10 times. If the board was already configured it first sends Klipper's `reset` command, which reboots it.
 
+**Firmware tab / `skipper_fw.py`** downloads Klipper v0.13.0 into `~/.skipper-flipper/klipper-v0.13.0`, copies our files into that clone, builds with the board's preset and writes the result to `~/.skipper-flipper/out/<board>-<time>/`. With the optional toolchain step of `printhost.py` it also installs `gcc-arm-none-eabi`, `gcc-avr`, `avrdude` and friends with apt (about 140 MB).
+
 **`fake_mcu.py`** is a pretend board on a pseudo-terminal. It touches nothing real.
 
 ## What it never does
 
-- never flashes firmware
-- never drives steppers or heaters, and never reads temperature sensors
-- never sends data over the network
+- never flashes firmware on its own: flashing exists in the Firmware tab / `skipper_fw.py flash`, only runs after you confirm, and has never been run on real hardware
+- never drives steppers or heaters, and never reads temperature sensors (the firmware it can build contains stepper code, but nothing here runs it)
+- never sends your data anywhere. The only network use is the optional firmware fetch, which clones Klipper from GitHub (`git clone` of github.com/Klipper3d/klipper) and the optional apt installs
 - never deletes your files
 
 ## Architecture (short version)

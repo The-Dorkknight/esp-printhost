@@ -1,0 +1,38 @@
+{
+  "id": "ender3-1.1.x",
+  "title": "Creality Ender-3 1.1.x Melzi (ATmega1284P)",
+  "description": "Original Ender-3 / CR-10 Melzi-style boards with an ATmega1284P at 16 MHz, serial at 250000 baud over a CH340, flashed with avrdude through the Optiboot-style bootloader.",
+  "mcu_arch": "avr",
+  "flash_method": "avrdude",
+  "dda_hz": 8000,
+  "dda_note": "ATmega1284P at 16 MHz. 8 kHz DDA = 2000 clock ticks per tick; max 4,000 steps/s per axis, i.e. 50 mm/s at 80 steps/mm. Conservative; ISR cost not measured.",
+  "serial_usb": "CH340 USB-serial as /dev/ttyUSB0, 250000 baud after Klipper is running.",
+  "avrdude": {
+    "part": "atmega1284p",
+    "programmer": "arduino",
+    "baud": 57600
+  },
+  "notes": [
+    "Compile-only: built in a sandbox with Klipper v0.13.0; never flashed or run on this board by the author.",
+    "Flashing baud 57600 comes from the comment in Klipper's config/printer-creality-ender3-2018.cfg ('avrdude -p atmega1284p -c arduino -b 57600 -P /dev/ttyUSB0 -U out/klipper.elf.hex'). Boards without a bootloader need an ISP programmer and are NOT covered.",
+    "UNVERIFIED: many Melzi clones ship without a bootloader or with a different baud; if flashing fails, see Klipper docs/Bootloaders.md.",
+    "UNVERIFIED: 1284P has 16 KiB RAM and 128 KiB flash; check the size numbers before enabling more features."
+  ],
+  "status": "compile-only",
+  "build_sizes": {
+    "segq_off": {
+      "flash_bytes": 35500,
+      "ram_static_bytes": 417
+    },
+    "segq_on": {
+      "flash_bytes": 38982,
+      "ram_static_bytes": 417
+    },
+    "flash_delta_bytes": 3482,
+    "note": "Klipper v0.13.0, arm-none-eabi/avr gcc from Ubuntu apt, sandbox build. RAM = static data+bss only; the segment queue itself is allocated at run time (depth * sizeof(segment): 24 bytes ARM, 23 bytes AVR)."
+  },
+  "sources": [
+    "Klipper v0.13.0 config/printer-creality-ender3-2018.cfg and config/generic-melzi.cfg (header comments)",
+    "Klipper v0.13.0 src/avr/Kconfig and src/avr/Makefile"
+  ]
+}

@@ -12,3 +12,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake zlib1g-dev
       - name: Build and run the unit tests
         run: python3 host/tools/build.py
+      - name: Python tool tests
+        run: cd host/tools && python3 -m unittest discover -p "test_*.py"
+      - name: Firmware glue simulation
+        run: sh firmware/test/run.sh

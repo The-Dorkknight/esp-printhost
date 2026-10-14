@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820" font-family="DejaVu Sans, Arial, sans-serif">
+  <defs>
+    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="8" stroke="#141414" stroke-width="1.2" opacity="0.25"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="820" fill="#e9e6dc"/>
+  <!-- film strip top and bottom -->
+  <rect x="0" y="0" width="1200" height="26" fill="#141414"/><rect x="0" y="794" width="1200" height="26" fill="#141414"/>
+  <g fill="#e9e6dc">
+    <rect x="14" y="7" width="18" height="12" rx="2"/><rect x="54" y="7" width="18" height="12" rx="2"/><rect x="94" y="7" width="18" height="12" rx="2"/><rect x="134" y="7" width="18" height="12" rx="2"/><rect x="174" y="7" width="18" height="12" rx="2"/><rect x="214" y="7" width="18" height="12" rx="2"/><rect x="254" y="7" width="18" height="12" rx="2"/><rect x="294" y="7" width="18" height="12" rx="2"/><rect x="334" y="7" width="18" height="12" rx="2"/><rect x="374" y="7" width="18" height="12" rx="2"/><rect x="414" y="7" width="18" height="12" rx="2"/><rect x="454" y="7" width="18" height="12" rx="2"/><rect x="494" y="7" width="18" height="12" rx="2"/><rect x="534" y="7" width="18" height="12" rx="2"/><rect x="574" y="7" width="18" height="12" rx="2"/><rect x="614" y="7" width="18" height="12" rx="2"/><rect x="654" y="7" width="18" height="12" rx="2"/><rect x="694" y="7" width="18" height="12" rx="2"/><rect x="734" y="7" width="18" height="12" rx="2"/><rect x="774" y="7" width="18" height="12" rx="2"/><rect x="814" y="7" width="18" height="12" rx="2"/><rect x="854" y="7" width="18" height="12" rx="2"/><rect x="894" y="7" width="18" height="12" rx="2"/><rect x="934" y="7" width="18" height="12" rx="2"/><rect x="974" y="7" width="18" height="12" rx="2"/><rect x="1014" y="7" width="18" height="12" rx="2"/><rect x="1054" y="7" width="18" height="12" rx="2"/><rect x="1094" y="7" width="18" height="12" rx="2"/><rect x="1134" y="7" width="18" height="12" rx="2"/><rect x="1174" y="7" width="18" height="12" rx="2"/>
+    <rect x="14" y="801" width="18" height="12" rx="2"/><rect x="54" y="801" width="18" height="12" rx="2"/><rect x="94" y="801" width="18" height="12" rx="2"/><rect x="134" y="801" width="18" height="12" rx="2"/><rect x="174" y="801" width="18" height="12" rx="2"/><rect x="214" y="801" width="18" height="12" rx="2"/><rect x="254" y="801" width="18" height="12" rx="2"/><rect x="294" y="801" width="18" height="12" rx="2"/><rect x="334" y="801" width="18" height="12" rx="2"/><rect x="374" y="801" width="18" height="12" rx="2"/><rect x="414" y="801" width="18" height="12" rx="2"/><rect x="454" y="801" width="18" height="12" rx="2"/><rect x="494" y="801" width="18" height="12" rx="2"/><rect x="534" y="801" width="18" height="12" rx="2"/><rect x="574" y="801" width="18" height="12" rx="2"/><rect x="614" y="801" width="18" height="12" rx="2"/><rect x="654" y="801" width="18" height="12" rx="2"/><rect x="694" y="801" width="18" height="12" rx="2"/><rect x="734" y="801" width="18" height="12" rx="2"/><rect x="774" y="801" width="18" height="12" rx="2"/><rect x="814" y="801" width="18" height="12" rx="2"/><rect x="854" y="801" width="18" height="12" rx="2"/><rect x="894" y="801" width="18" height="12" rx="2"/><rect x="934" y="801" width="18" height="12" rx="2"/><rect x="974" y="801" width="18" height="12" rx="2"/><rect x="1014" y="801" width="18" height="12" rx="2"/><rect x="1054" y="801" width="18" height="12" rx="2"/><rect x="1094" y="801" width="18" height="12" rx="2"/><rect x="1134" y="801" width="18" height="12" rx="2"/><rect x="1174" y="801" width="18" height="12" rx="2"/>
+  </g>
+  <text x="40" y="68" font-size="30" font-weight="900" fill="#141414">THE POTATO CHIP: ALLWINNER R528-S3</text>
+  <text x="40" y="94" font-size="15" fill="#141414">as used in the Elegoo Centauri Carbon (CC1). Blocks from Allwinner's R528 brief v1.3; how the printer uses them from OpenCentauri's notes.</text>
+
+  <!-- chip outline -->
+  <rect x="40" y="114" width="760" height="560" fill="#f7f5ee" stroke="#141414" stroke-width="5"/>
+  <text x="56" y="142" font-size="16" font-weight="700" fill="#141414">ONE CHIP · LFBGA 226 balls · 12 x 12 mm</text>
+
+  <!-- CPU -->
+  <rect x="60" y="158" width="350" height="190" fill="#e9e6dc" stroke="#141414" stroke-width="3.5"/>
+  <text x="76" y="186" font-size="20" font-weight="900">2 x ARM Cortex-A7</text>
+  <text x="76" y="208" font-size="14">32 KB + 32 KB L1 each, 256 KB L2</text>
+  <rect x="76" y="222" width="318" height="110" fill="#141414"/>
+  <text x="88" y="246" font-size="14" font-weight="700" fill="#e9e6dc">IN THE CC1: THE "HOST"</text>
+  <text x="88" y="268" font-size="13" fill="#e9e6dc">Tina Linux (kernel 5.4.61)</text>
+  <text x="88" y="288" font-size="13" fill="#e9e6dc">one monolithic app: web UI, camera,</text>
+  <text x="88" y="306" font-size="13" fill="#e9e6dc">API, screen UI, and Klipper's host</text>
+  <text x="88" y="324" font-size="13" fill="#e9e6dc">(Klippy) transpiled to C++</text>
+
+  <!-- DSP -->
+  <rect x="430" y="158" width="350" height="190" fill="#e9e6dc" stroke="#141414" stroke-width="3.5"/>
+  <text x="446" y="186" font-size="20" font-weight="900">HiFi4 DSP (audio)</text>
+  <text x="446" y="208" font-size="14">64 KB I-RAM, 64 KB D-RAM</text>
+  <rect x="446" y="222" width="318" height="110" fill="#141414"/>
+  <text x="458" y="246" font-size="14" font-weight="700" fill="#e9e6dc">IN THE CC1: THE "MCU"</text>
+  <text x="458" y="268" font-size="13" fill="#e9e6dc">runs Klipper's board firmware,</text>
+  <text x="458" y="288" font-size="13" fill="#e9e6dc">"extended and modified for DSP use"</text>
+  <text x="458" y="306" font-size="13" fill="#e9e6dc">(v0.9.1-616-g28f60f7e)</text>
+  <text x="458" y="324" font-size="13" fill="#e9e6dc">no separate microcontroller needed</text>
+
+  <!-- link -->
+  <line x1="410" y1="253" x2="430" y2="253" stroke="#141414" stroke-width="5"/>
+
+  <!-- audio codec -->
+  <rect x="60" y="366" width="350" height="140" fill="url(#hatch)" stroke="#141414" stroke-width="3.5"/>
+  <rect x="60" y="366" width="350" height="140" fill="none" stroke="#141414" stroke-width="3.5"/>
+  <text x="76" y="394" font-size="20" font-weight="900">Audio codec</text>
+  <text x="76" y="416" font-size="14">3 ADC, 2 DAC, LINEOUT, HPOUT,</text>
+  <text x="76" y="434" font-size="14">MIC in x3, 3 x I2S/PCM, 8-ch DMIC</text>
+  <rect x="76" y="446" width="318" height="48" fill="#c4161c"/>
+  <text x="88" y="466" font-size="13" font-weight="700" fill="#fff">THE STORY: a DAC put to work driving</text>
+  <text x="88" y="484" font-size="13" font-weight="700" fill="#fff">printer hardware. Not verified here (?)</text>
+
+  <!-- memory -->
+  <rect x="430" y="366" width="350" height="140" fill="#e9e6dc" stroke="#141414" stroke-width="3.5"/>
+  <text x="446" y="394" font-size="20" font-weight="900">128 MB DDR3, in package</text>
+  <text x="446" y="418" font-size="14">(R528-S3; the S2 has 64 MB DDR2)</text>
+  <text x="446" y="446" font-size="14">That is the whole printer's RAM:</text>
+  <text x="446" y="466" font-size="14">Linux, the C++ host, the web UI,</text>
+  <text x="446" y="486" font-size="14">the camera and the screen.</text>
+
+  <!-- peripherals -->
+  <rect x="60" y="524" width="720" height="134" fill="#e9e6dc" stroke="#141414" stroke-width="3.5"/>
+  <text x="76" y="552" font-size="20" font-weight="900">Everything else on the same chip</text>
+  <text x="76" y="578" font-size="14">UART x6 · SPI x2 · TWI x4 · PWM 8-ch · GPADC 2-ch · LRADC · TPADC 4-ch · IR</text>
+  <text x="76" y="600" font-size="14">USB 2.0 DRD + host · 10/100/1000 EMAC · SDIO 3.0 · SD/eMMC · SPI NOR/NAND</text>
+  <text x="76" y="622" font-size="14">Video: H.265/H.264 decode, JPEG/MJPEG encode · RGB / LVDS / MIPI-DSI out · parallel CSI in</text>
+  <text x="76" y="644" font-size="14">Security: AES, RSA, SHA, true random numbers, 2 Kbit OTP</text>
+
+  <!-- off-chip -->
+  <text x="830" y="142" font-size="16" font-weight="700" fill="#141414">ON THE CC1 MAINBOARD, OFF-CHIP</text>
+  <rect x="830" y="158" width="330" height="80" fill="#f7f5ee" stroke="#141414" stroke-width="3.5"/>
+  <text x="846" y="188" font-size="18" font-weight="900">TMC2209 drivers</text>
+  <text x="846" y="212" font-size="14">steppers X, Y, Z</text>
+  <rect x="830" y="254" width="330" height="80" fill="#f7f5ee" stroke="#141414" stroke-width="3.5"/>
+  <text x="846" y="284" font-size="18" font-weight="900">8 GB eMMC</text>
+  <text x="846" y="308" font-size="14">storage</text>
+  <rect x="830" y="350" width="330" height="80" fill="#f7f5ee" stroke="#141414" stroke-width="3.5"/>
+  <text x="846" y="380" font-size="18" font-weight="900">Bed MCU (RS-232)</text>
+  <text x="846" y="404" font-size="14">its own small processor</text>
+  <rect x="830" y="446" width="330" height="80" fill="#f7f5ee" stroke="#141414" stroke-width="3.5"/>
+  <text x="846" y="476" font-size="18" font-weight="900">Fans, heaters</text>
+  <text x="846" y="500" font-size="14">PWM outputs "controlled by MCU"</text>
+  <line x1="800" y1="198" x2="830" y2="198" stroke="#141414" stroke-width="4"/>
+  <line x1="800" y1="294" x2="830" y2="294" stroke="#141414" stroke-width="4"/>
+  <line x1="800" y1="390" x2="830" y2="390" stroke="#141414" stroke-width="4"/>
+  <line x1="800" y1="486" x2="830" y2="486" stroke="#141414" stroke-width="4"/>
+
+  <rect x="830" y="546" width="330" height="128" fill="#141414"/>
+  <text x="846" y="576" font-size="16" font-weight="900" fill="#e9e6dc">COMPARE: SKIPPER FLIPPER</text>
+  <text x="846" y="600" font-size="13" fill="#e9e6dc">host: ESP32-S3, ~160 KB free RAM</text>
+  <text x="846" y="620" font-size="13" fill="#e9e6dc">"MCU": RP2040 on an SKR Pico,</text>
+  <text x="846" y="640" font-size="13" fill="#e9e6dc">stock Klipper v0.13.0 code paths</text>
+  <text x="846" y="660" font-size="13" fill="#e9e6dc">two chips, four jumper wires</text>
+
+  <text x="40" y="712" font-size="13" fill="#141414">Sources: Allwinner R528 brief V1.3 (block list); OpenCentauri docs (mainboard: R528-S3, 128 MB, 8 GB eMMC, TMC2209, bed MCU; software: DSP runs modified</text>
+  <text x="40" y="732" font-size="13" fill="#141414">Klipper MCU code, host app with Klippy transpiled to C++, Tina Linux 5.4.61). The DAC story (hatched, red) is how it was told to me, not something I have verified.</text>
+  <text x="40" y="762" font-size="13" font-style="italic" fill="#141414">Diagram drawn for this paper, not Allwinner's or Elegoo's artwork. Block sizes are not to scale.</text>
+</svg>

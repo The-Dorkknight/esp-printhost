@@ -1,0 +1,37 @@
+{
+  "board": "creality-4.2.x",
+  "title": "Creality 4.2.x (STM32F103, stock bootloader)",
+  "preset": "creality-4.2.x.config",
+  "segq": true,
+  "status": "compile-only",
+  "klipper_tag": "v0.13.0",
+  "klipper_commit": "61c0c8d2ef40340781835dd53fb04cc7a454e37a",
+  "tool_version": "0.1.0-wip",
+  "built": "2026-10-05T14:56:46",
+  "primary_artifact": "klipper.bin",
+  "size": {
+    "text": 35296,
+    "data": 52,
+    "bss": 1092,
+    "flash_bytes": 35348,
+    "ram_bytes": 1144
+  },
+  "artifacts": {
+    "klipper.bin": {
+      "bytes": 35348,
+      "sha256": "7afde612fa49876a77064692289e371480046994df76e5ea8c7cd31caa2798bf"
+    },
+    "klipper.dict": {
+      "bytes": 9254,
+      "sha256": "4ec395f05b3caee72d3a42bbdb4df2a963f1943907a3b1e6fa4c19995c0cc1be"
+    }
+  },
+  "source_sha256": {
+    "segq.c": "d931934ee20d80f2e2848486ade3d888bb2f0049d74b53d7e202988c5a22d7e6",
+    "segq_core.c": "11eaeb53fe423c678bfbfdeddda801b2c21ed40738a31bec56d681ed7f2981dc",
+    "segq_core.h": "0f5435ae32670ca73b8bffd1668bf26ed4694fe50b14b2850c682805e75b829b",
+    "creality-4.2.x.config": "592edd35db425fbfa0bccbc436d2ae4456267642fecd132a7a215fa15c862c11"
+  },
+  "note": "compile-only: this firmware has NOT been verified on hardware",
+  "prebuilt": true
+}

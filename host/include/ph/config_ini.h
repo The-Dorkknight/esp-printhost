@@ -47,6 +47,10 @@ public:
     long geti(const std::string& k, long dflt, long minv = -2147483647L,
               long maxv = 2147483647L) const;
     bool getb(const std::string& k, bool dflt) const;
+    // Line number of a key (0 if absent), for error messages.
+    int line_of(const std::string& k) const { auto v = vals_.find(k); return v == vals_.end() ? 0 : v->second.line; }
+    // Record a problem against this config (shown with the other errors).
+    void report(const std::string& m) const { error(m); }
 
 private:
     friend class Config;
@@ -59,5 +63,11 @@ private:
     std::map<std::string, Val> vals_;
     const Config* owner_ = nullptr;
 };
+
+// Set one option in printer.cfg text, keeping everything else (comments, order) as it is: replaces
+// the option's line inside [section], or adds it at the end of that section, or adds the section.
+// Used to store PID_CALIBRATE results (Klipper's SAVE_CONFIG writes a block at the end instead).
+std::string config_set_option(const std::string& text, const std::string& section, const std::string& key,
+                              const std::string& value);
 
 }  // namespace ph

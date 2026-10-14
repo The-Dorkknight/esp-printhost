@@ -1,0 +1,37 @@
+{
+  "board": "ramps-mega2560",
+  "title": "RAMPS on Arduino Mega 2560 (ATmega2560)",
+  "preset": "ramps-mega2560.config",
+  "segq": true,
+  "status": "compile-only",
+  "klipper_tag": "v0.13.0",
+  "klipper_commit": "61c0c8d2ef40340781835dd53fb04cc7a454e37a",
+  "tool_version": "0.1.0-wip",
+  "built": "2026-10-05T14:57:00",
+  "primary_artifact": "klipper.elf.hex",
+  "size": {
+    "text": 39456,
+    "data": 48,
+    "bss": 370,
+    "flash_bytes": 39504,
+    "ram_bytes": 418
+  },
+  "artifacts": {
+    "klipper.elf.hex": {
+      "bytes": 111118,
+      "sha256": "527bd7c96d846f0bf01ae36f7c496fb89a4cdff32b0ca59b517f1c4632d75f94"
+    },
+    "klipper.dict": {
+      "bytes": 9098,
+      "sha256": "4dead54a5ccf6aae3ebf04c1a652e3ae38797dd6b8d683084ff6f2a1b042452e"
+    }
+  },
+  "source_sha256": {
+    "segq.c": "d931934ee20d80f2e2848486ade3d888bb2f0049d74b53d7e202988c5a22d7e6",
+    "segq_core.c": "11eaeb53fe423c678bfbfdeddda801b2c21ed40738a31bec56d681ed7f2981dc",
+    "segq_core.h": "0f5435ae32670ca73b8bffd1668bf26ed4694fe50b14b2850c682805e75b829b",
+    "ramps-mega2560.config": "cbe0d81606dc731b79a079b1990ea6dd210ce73b4281fd082044ada181b22b6c"
+  },
+  "note": "compile-only: this firmware has NOT been verified on hardware",
+  "prebuilt": true
+}

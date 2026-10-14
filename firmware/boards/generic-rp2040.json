@@ -1,0 +1,32 @@
+{
+  "id": "generic-rp2040",
+  "title": "Generic RP2040 (Raspberry Pi Pico style, USB)",
+  "description": "Any RP2040 board with the standard second-stage flash settings, USB serial, no bootloader. Same build as the SKR Pico preset but without board-specific pin assumptions (Klipper pins are chosen in the printer config).",
+  "mcu_arch": "rp2040",
+  "flash_method": "uf2-copy",
+  "dda_hz": 40000,
+  "dda_note": "Same arithmetic as skr-pico: 12 MHz Klipper clock, 40 kHz DDA, max 20,000 steps/s per axis. Unmeasured.",
+  "serial_usb": "USB CDC-ACM serial.",
+  "notes": [
+    "Compile-only: built in a sandbox with Klipper v0.13.0; never flashed or run on this board by the author.",
+    "BOOTSEL: hold the boot button while plugging USB in; a drive named RPI-RP2 appears.",
+    "UNVERIFIED: flash chip type of your board. Boards that do not use W25Q080-compatible flash may need the GENERIC_03H option via Menuconfig."
+  ],
+  "status": "compile-only",
+  "build_sizes": {
+    "segq_off": {
+      "flash_bytes": 39264,
+      "ram_static_bytes": 1544
+    },
+    "segq_on": {
+      "flash_bytes": 40184,
+      "ram_static_bytes": 1544
+    },
+    "flash_delta_bytes": 920,
+    "note": "Klipper v0.13.0, arm-none-eabi/avr gcc from Ubuntu apt, sandbox build. RAM = static data+bss only; the segment queue itself is allocated at run time (depth * sizeof(segment): 24 bytes ARM, 23 bytes AVR)."
+  },
+  "sources": [
+    "Klipper v0.13.0 src/rp2040/Kconfig",
+    "Klipper v0.13.0 config/generic-bigtreetech-skr-pico-v1.0.cfg (RP2040 USB flow)"
+  ]
+}

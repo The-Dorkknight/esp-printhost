@@ -86,17 +86,26 @@ def build_cmake(jobs):
 
 
 def build_direct(cxx):
-    """No CMake: compile everything straight with the compiler."""
+    """No CMake: compile everything straight with the compiler (same sources as CMakeLists.txt)."""
+    segq = os.path.join(os.path.dirname(HOST), "firmware", "skipper")
     srcs = sorted(glob.glob(os.path.join(HOST, "src", "*.cpp")))
-    inc = ["-I", os.path.join(HOST, "include")]
+    tests = sorted(glob.glob(os.path.join(HOST, "test", "*.cpp")))
+    inc = ["-I", os.path.join(HOST, "include"), "-I", segq]
     flags = ["-std=c++17", "-O2", "-Wall", "-Wextra"]
     os.makedirs(BUILD, exist_ok=True)
-    ok = run([cxx] + flags + inc + srcs + [os.path.join(HOST, "test", "test_main.cpp"),
-              "-o", os.path.join(BUILD, "ph_tests")]) == 0
+    # the segment-queue core is C99: compile it as C, then link it in
+    cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    segq_obj = os.path.join(BUILD, "segq_core.o")
+    ok = run([cc, "-std=c99", "-O2", "-Wall", "-Wextra", "-I", segq, "-c",
+              os.path.join(segq, "segq_core.c"), "-o", segq_obj]) == 0 if cc else False
+    if not ok:
+        return False
+    ok = run([cxx] + flags + inc + srcs + tests + [segq_obj, "-o", os.path.join(BUILD, "ph_tests")]) == 0
     if IS_LINUX:
-        ok &= run([cxx] + flags + ["-Wno-missing-field-initializers"] + inc + srcs
-                  + [os.path.join(HOST, "tools", "mcu_probe.cpp"), "-lz",
-                     "-o", os.path.join(BUILD, "mcu_probe")]) == 0
+        for tool in ("mcu_probe", "klink_probe"):
+            ok &= run([cxx] + flags + ["-Wno-missing-field-initializers"] + inc + srcs + [segq_obj]
+                      + [os.path.join(HOST, "tools", tool + ".cpp"), "-lz",
+                         "-o", os.path.join(BUILD, tool)]) == 0
     return ok
 
 
