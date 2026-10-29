@@ -16,3 +16,19 @@ CONFIG_LWIP_MAX_SOCKETS=16
 # Stop with a clear "stack overflow" message the moment any task runs off the end of its stack,
 # instead of silently corrupting the memory below it.
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+# Crash reports: a core dump in its own partition, read back after the restart (main/crash.c)
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+# micro SD card (G-code files): long file names, UTF-8 names
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+CONFIG_FATFS_API_ENCODING_UTF_8=y
+# 2026-10-27: the TCP/IP task stays on core 0 with WiFi, so it cannot hold off the printer link
+# task (pinned to core 1, priority 10; see main/link.cpp)
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+# 2026-10-27 speed-up (all builds): the chip ran at ESP-IDF's default 160 MHz; it is rated for 240.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# DECKHAND (2026-10-28): no table of error names (about 7 KB); errors show as a number, e.g. 0x107.
+# CAPTAIN and SKIPPER turn it back on (tiers/*.defaults).
+CONFIG_ESP_ERR_TO_NAME_LOOKUP=n

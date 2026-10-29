@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 Matthew Armstrong (https://github.com/The-Dorkknight)
 # SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
-"""Skipper Flipper firmware tool: fetch Klipper, overlay the segment queue, build, flash.
+"""Skipper Flipper firmware tool: fetch Klipper, build it unmodified for a board preset, flash.
 
     python3 tools/skipper_fw.py list
     python3 tools/skipper_fw.py check [board]
     python3 tools/skipper_fw.py fetch
-    python3 tools/skipper_fw.py build skr-pico [--no-segq] [--menuconfig] [--jobs N]
+    python3 tools/skipper_fw.py build skr-pico [--menuconfig] [--jobs N]
     python3 tools/skipper_fw.py flash skr-pico [--artifact DIR] [--method M]
                                    [--port P] [--mount PATH] [--dry-run] [--yes]
     python3 tools/skipper_fw.py bundle [board ...]      (maintainer: refresh the shipped firmware)
     python3 tools/skipper_fw.py pins skr-pico
-    python3 tools/skipper_fw.py overlay --apply|--remove [--klipper-dir DIR]
+    python3 tools/skipper_fw.py clean [--klipper-dir DIR]   (undo the old segment-queue overlay)
+
+The printer board runs plain Klipper v0.13.0: the presets only choose Klipper's own menuconfig
+options (chip, flash chip, USB or UART). The ESP32-S3 firmware is the only bespoke part. Until
+2026-10-25 the tool also added an experimental "segment queue" (segq) to Klipper; it was never used
+by the host and is gone (docs/research/segq-retired.md). Builds remove any of it left in the
+Klipper folder and refuse to build if Klipper's src/ differs from the release.
 
 Everything lives in ~/.skipper-flipper (override with $SKIPPER_FLIPPER_HOME):
     klipper-v0.13.0/   shallow clone of Klipper at the pinned tag
@@ -48,17 +54,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 FW_DIR = os.path.join(REPO_ROOT, "firmware")
 BOARDS_DIR = os.path.join(FW_DIR, "boards")
-SKIPPER_SRC_DIR = os.path.join(FW_DIR, "skipper")
-OVERLAY_FILES = ("segq.c", "segq_core.c", "segq_core.h")
-
+# The retired segment-queue overlay (until 2026-10-25): only kept so old Klipper folders are cleaned.
+LEGACY_OVERLAY_FILES = ("segq.c", "segq_core.c", "segq_core.h")
 KCONFIG_BEGIN = "# >>> skipper-flipper segq (managed by skipper_fw.py) >>>"
 KCONFIG_END = "# <<< skipper-flipper segq <<<"
-KCONFIG_BODY = (
-    "config WANT_SEGQ\n"
-    "    bool \"Skipper Flipper segment queue (experimental)\"\n"
-    "    default y\n"
-    "    depends on HAVE_GPIO\n")
-MAKEFILE_BODY = "src-$(CONFIG_WANT_SEGQ) += segq.c segq_core.c\n"
 
 FLASH_METHODS = ("uf2-copy", "sdcard-copy", "avrdude", "manual")
 ARCHES = ("rp2040", "stm32", "avr")
@@ -83,7 +82,7 @@ ARTIFACT_NAMES = ("klipper.uf2", "klipper.bin", "klipper.elf.hex", "klipper.elf"
 # Flash methods offered per chip family (STM32 boards: SD card; no DFU yet)
 ARCH_METHODS = {"rp2040": ("uf2-copy", "manual"), "stm32": ("sdcard-copy", "manual"), "avr": ("avrdude", "manual")}
 PRIMARY_EXT = {"uf2-copy": ".uf2", "sdcard-copy": ".bin", "avrdude": ".hex", "manual": None}
-REQUIRED_KEYS = ("id", "title", "description", "mcu_arch", "flash_method", "dda_hz", "notes", "status", "sources")
+REQUIRED_KEYS = ("id", "title", "description", "mcu_arch", "flash_method", "notes", "status", "sources")
 
 
 def methods_for(preset):
@@ -149,8 +148,6 @@ def validate_preset(meta, config_text=None):
         p.append(f"mcu_arch must be one of {ARCHES}")
     if meta["flash_method"] not in FLASH_METHODS:
         p.append(f"flash_method must be one of {FLASH_METHODS}")
-    if not isinstance(meta["dda_hz"], int) or isinstance(meta["dda_hz"], bool) or meta["dda_hz"] <= 0:
-        p.append("dda_hz must be a positive integer")
     if meta["status"] not in VALID_STATUS:
         p.append(f"status must be one of {VALID_STATUS}")
     if meta["status"] == "hardware-tested" and not meta.get("tested_on"):
@@ -172,8 +169,8 @@ def validate_preset(meta, config_text=None):
         lines = [l.strip() for l in config_text.splitlines()]
         if want and want not in lines:
             p.append(f".config must contain {want}")
-        if "CONFIG_WANT_SEGQ=y" in lines or "# CONFIG_WANT_SEGQ is not set" in lines:
-            p.append("preset .config must not pin CONFIG_WANT_SEGQ (the tool sets it per build)")
+        if any("WANT_SEGQ" in l for l in lines):
+            p.append("preset .config must not mention CONFIG_WANT_SEGQ (the segment queue is gone)")
     return p
 
 
@@ -208,12 +205,7 @@ def get_preset(board, boards_dir=None):
     return presets[board]
 
 
-def max_step_rate(dda_hz):
-    """2*|steps| <= n  =>  at most one step every 2 DDA ticks per axis."""
-    return dda_hz // 2
-
-
-# ------------------------------------------------------------------ overlay
+# ------------------------------------------------------------------ plain Klipper
 def _strip_block(text, begin, end):
     out, skipping, found = [], False, False
     for line in text.splitlines(keepends=True):
@@ -229,98 +221,64 @@ def _strip_block(text, begin, end):
     return "".join(out), found
 
 
-def _add_block(text, begin, end, body):
-    text, _ = _strip_block(text, begin, end)
-    if text and not text.endswith("\n"):
-        text += "\n"
-    if text and not text.endswith("\n\n"):
-        text += "\n"
-    return text + begin + "\n" + body + end + "\n"
-
-
-def _rw(path, fn):
-    with open(path, encoding="utf-8") as f:
-        old = f.read()
-    new = fn(old)
-    if new != old:
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(new)
+def legacy_overlay_present(kdir):
+    """True if any part of the old segq overlay is still in this Klipper tree."""
+    src = os.path.join(kdir, "src")
+    if any(os.path.isfile(os.path.join(src, n)) for n in LEGACY_OVERLAY_FILES):
         return True
+    for n in ("Kconfig", "Makefile"):
+        try:
+            with open(os.path.join(src, n), encoding="utf-8") as f:
+                if KCONFIG_BEGIN in f.read():
+                    return True
+        except OSError:
+            pass
     return False
 
 
-def overlay_status(kdir):
-    """True if the segq overlay is fully applied to this Klipper tree."""
-    try:
-        with open(os.path.join(kdir, "src", "Kconfig"), encoding="utf-8") as f:
-            k = KCONFIG_BEGIN in f.read()
-        with open(os.path.join(kdir, "src", "Makefile"), encoding="utf-8") as f:
-            m = KCONFIG_BEGIN in f.read()
-    except OSError:
-        return False
-    files = all(os.path.isfile(os.path.join(kdir, "src", n)) for n in OVERLAY_FILES)
-    return k and m and files
-
-
-def source_hashes(preset, skipper_dir=None):
-    """sha256 of every input that shapes a firmware build: the overlay sources and the preset .config.
-    Stored as build-info.json "source_sha256" so a shipped build can be checked for staleness."""
-    skipper_dir = skipper_dir or SKIPPER_SRC_DIR
-    res = {n: sha256_file(os.path.join(skipper_dir, n)) for n in OVERLAY_FILES}
-    res[os.path.basename(preset["config_path"])] = sha256_file(preset["config_path"])
-    return res
-
-
-def apply_overlay(kdir, skipper_dir=None):
-    """Copy the segq sources into <kdir>/src and wire up Kconfig + Makefile. Idempotent."""
-    skipper_dir = skipper_dir or SKIPPER_SRC_DIR
-    src = os.path.join(kdir, "src")
-    for need in ("Kconfig", "Makefile"):
-        if not os.path.isfile(os.path.join(src, need)):
-            raise FwError(f"{kdir} does not look like a Klipper tree (no src/{need})")
-    changed = []
-    for n in OVERLAY_FILES:
-        s, d = os.path.join(skipper_dir, n), os.path.join(src, n)
-        if not os.path.isfile(s):
-            raise FwError(f"missing overlay source {s}")
-        with open(s, "rb") as f:
-            data = f.read()
-        old = None
-        if os.path.isfile(d):
-            with open(d, "rb") as f:
-                old = f.read()
-        if old != data:
-            with open(d, "wb") as f:
-                f.write(data)
-            changed.append("src/" + n)
-    if _rw(os.path.join(src, "Kconfig"),
-           lambda t: _add_block(t, KCONFIG_BEGIN, KCONFIG_END, KCONFIG_BODY)):
-        changed.append("src/Kconfig")
-    if _rw(os.path.join(src, "Makefile"),
-           lambda t: _add_block(t, KCONFIG_BEGIN, KCONFIG_END, MAKEFILE_BODY)):
-        changed.append("src/Makefile")
-    return changed
-
-
-def remove_overlay(kdir):
-    """Undo apply_overlay exactly (also fine if it was never applied)."""
+def remove_legacy_overlay(kdir):
+    """Take the old segq overlay out of a Klipper tree (also fine if it was never there).
+    Kconfig and Makefile are restored from git when the tree is a checkout."""
     src = os.path.join(kdir, "src")
     changed = []
     for n in ("Kconfig", "Makefile"):
         p = os.path.join(src, n)
-        if os.path.isfile(p):
-            def strip(t):
-                new, _ = _strip_block(t, KCONFIG_BEGIN, KCONFIG_END)
-                return new.rstrip("\n") + "\n" if new.strip() else new
-            # _add_block added one blank separator line; strip() removes it too
-            if _rw(p, strip):
-                changed.append("src/" + n)
-    for n in OVERLAY_FILES:
+        if not os.path.isfile(p):
+            continue
+        with open(p, encoding="utf-8") as f:
+            old = f.read()
+        if KCONFIG_BEGIN not in old:
+            continue
+        if os.path.isdir(os.path.join(kdir, ".git")):
+            git_out(kdir, "checkout", "--", "src/" + n)
+        else:
+            new, _ = _strip_block(old, KCONFIG_BEGIN, KCONFIG_END)
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(new.rstrip("\n") + "\n")
+        changed.append("src/" + n)
+    for n in LEGACY_OVERLAY_FILES:
         p = os.path.join(src, n)
         if os.path.isfile(p):
             os.remove(p)
             changed.append("src/" + n)
     return changed
+
+
+def check_plain(kdir):
+    """Raise unless Klipper's src/ (and Makefile, Kconfig) are exactly the release: no local edits,
+    no extra files. Only checked for git checkouts."""
+    if not os.path.isdir(os.path.join(kdir, ".git")):
+        return
+    st = git_out(kdir, "status", "--porcelain", "--", "src", "Makefile", "lib", "scripts")
+    if st.strip():
+        raise FwError(f"{kdir} is not plain Klipper {KLIPPER_TAG}: it has local changes\n{st}\n"
+                      "Delete the folder (Fetch Klipper downloads it again) or undo the changes.")
+
+
+def source_hashes(preset):
+    """sha256 of every input that shapes a firmware build (the preset .config; Klipper itself is
+    pinned by commit). Stored as build-info.json "source_sha256" to spot stale shipped builds."""
+    return {os.path.basename(preset["config_path"]): sha256_file(preset["config_path"])}
 
 
 def set_config_option(text, name, value):
@@ -487,20 +445,23 @@ def build(*args, **kwargs):
         return _build(*args, **kwargs)
 
 
-def _build(board, segq=True, menuconfig=False, jobs=None, boards_dir=None, kdir=None,
-           out_base=None, now=None):
+def _build(board, menuconfig=False, jobs=None, boards_dir=None, kdir=None,
+           out_base=None, now=None, segq=None):
     preset = get_preset(board, boards_dir)
     kdir = kdir or fetch()
     verify_checkout(kdir)
     rows, pkgs = check_tools([preset["mcu_arch"]], [])
     if pkgs:
         raise FwError("missing tools: " + ", ".join(r[0] for r in rows if not r[1]) + "\nTry:  " + apt_hint(pkgs))
-    say(f"Board: {preset['title']}  (segq {'ON' if segq else 'OFF'}, status: {preset['status']})")
-    changed = apply_overlay(kdir)
-    say("Overlay applied: " + (", ".join(changed) if changed else "already up to date"))
-    cfg = set_config_option(preset["config_text"], "WANT_SEGQ", segq)
+    if segq:
+        raise FwError("the segment queue has been removed: the board now runs plain Klipper")
+    say(f"Board: {preset['title']}  (plain Klipper {KLIPPER_TAG}, status: {preset['status']})")
+    changed = remove_legacy_overlay(kdir)
+    if changed:
+        say("Old segment-queue overlay removed: " + ", ".join(changed))
+    check_plain(kdir)
     with open(os.path.join(kdir, ".config"), "w", encoding="utf-8") as f:
-        f.write(cfg)
+        f.write(preset["config_text"])
     make = ["make", "-C", kdir]
     run_stream(make + ["olddefconfig"])
     if menuconfig:
@@ -508,10 +469,8 @@ def _build(board, segq=True, menuconfig=False, jobs=None, boards_dir=None, kdir=
         subprocess.call(make + ["menuconfig"], stdin=None)
     with open(os.path.join(kdir, ".config"), encoding="utf-8") as f:
         final_cfg = f.read()
-    has_seg = config_has(final_cfg, "WANT_SEGQ")
-    if segq and not has_seg:
-        raise FwError("CONFIG_WANT_SEGQ ended up off (menuconfig change?). Build aborted so a "
-                      "'segq' build is never silently stock.")
+    if "WANT_SEGQ" in final_cfg:
+        raise FwError("the Klipper .config still mentions WANT_SEGQ: the tree is not plain Klipper")
     run_stream(make + ["clean"])
     jobs = jobs or os.cpu_count() or 2
     run_stream(make + [f"-j{jobs}"])
@@ -532,7 +491,7 @@ def _build(board, segq=True, menuconfig=False, jobs=None, boards_dir=None, kdir=
     primary = next((n for n in found if primary_ext and n.endswith(primary_ext)), None)
     info = {
         "board": board, "title": preset["title"], "preset": os.path.basename(preset["config_path"]),
-        "segq": bool(has_seg), "status": preset["status"],
+        "plain_klipper": True, "status": preset["status"],
         "klipper_tag": KLIPPER_TAG, "klipper_commit": git_out(kdir, "rev-parse", "HEAD"),
         "tool_version": __version__, "built": (now or dt.datetime.now()).isoformat(timespec="seconds"),
         "primary_artifact": primary, "size": size, "artifacts": arts,
@@ -632,7 +591,7 @@ def find_prebuilt(board, root=None):
     return d if read_build_info(d) else None
 
 
-def bundle(boards=None, segq=True, boards_dir=None, dest_root=None, jobs=None, build_fn=None):
+def bundle(boards=None, boards_dir=None, dest_root=None, jobs=None, build_fn=None):
     """Build every board (or the given ones) and store the results as the shipped firmware:
     firmware/prebuilt/<board>/{klipper.uf2|.bin|.hex, klipper.dict, pins.json, build-info.json}.
     The .elf and the full config are not copied (size)."""
@@ -641,7 +600,7 @@ def bundle(boards=None, segq=True, boards_dir=None, dest_root=None, jobs=None, b
     names = boards or sorted(load_presets())
     done = []
     for b in names:
-        adir = build_fn(b, segq=segq, jobs=jobs)
+        adir = build_fn(b, jobs=jobs)
         info = read_build_info(adir) or {}
         dst = os.path.join(dest_root, b)
         if os.path.isdir(dst):
@@ -977,7 +936,7 @@ def flash(board, artifact=None, method=None, port=None, mount=None, baud=None,
         raise FwError("a firmware build is running; wait for it to finish before flashing.")
     fwfile = primary_artifact(adir, method) if method != "manual" else None
     say(f"Board:    {preset['title']}")
-    say(f"Build:    {adir}  (segq {'ON' if info.get('segq') else 'OFF'}, klipper {info.get('klipper_tag', '?')})")
+    say(f"Build:    {adir}  (klipper {info.get('klipper_tag', '?')}{', with the old segment queue' if info.get('segq') else ''})")
     say(f"Method:   {method}")
     say(f"Status:   {preset['status']}" + ("  (never run on hardware by the author)"
                                           if preset["status"] != "hardware-tested" else ""))
@@ -1043,7 +1002,7 @@ def cmd_list(args):
         say(json.dumps({k: {x: v for x, v in p.items() if x not in ("config_text",)} for k, p in presets.items()}, indent=2))
         return 0
     for k, p in presets.items():
-        say(f"{k:18} {p['mcu_arch']:7} {p['flash_method']:12} dda {p['dda_hz']} Hz  [{p['status']}]  {p['title']}")
+        say(f"{k:18} {p['mcu_arch']:7} {p['flash_method']:12} [{p['status']}]  {p['title']}")
     return 0
 
 
@@ -1071,12 +1030,11 @@ def cmd_check(args):
     return 0
 
 
-def cmd_overlay(args):
+def cmd_clean(args):
     kd = args.klipper_dir or klipper_dir()
-    if args.remove:
-        say("removed: " + (", ".join(remove_overlay(kd)) or "nothing to remove"))
-    else:
-        say("applied: " + (", ".join(apply_overlay(kd)) or "already up to date"))
+    say("removed: " + (", ".join(remove_legacy_overlay(kd)) or "nothing to remove"))
+    check_plain(kd)
+    say(f"{kd} is plain Klipper {KLIPPER_TAG}.")
     return 0
 
 
@@ -1091,7 +1049,7 @@ def main(argv=None):
     sub.add_parser("fetch", help=f"shallow-clone Klipper {KLIPPER_TAG}")
     p = sub.add_parser("build", help="build firmware for a board")
     p.add_argument("board")
-    p.add_argument("--no-segq", action="store_true", help="stock Klipper without the segment queue")
+    p.add_argument("--no-segq", action="store_true", help=argparse.SUPPRESS)   # old option: builds are always plain
     p.add_argument("--menuconfig", action="store_true", help="open Klipper menuconfig before building")
     p.add_argument("--jobs", type=int, default=None)
     p = sub.add_parser("flash", help="flash a built firmware (never implicit)")
@@ -1105,13 +1063,10 @@ def main(argv=None):
     p.add_argument("--yes", action="store_true", help="skip the typed confirmation")
     p = sub.add_parser("bundle", help="build boards and store them as the shipped firmware (maintainer step)")
     p.add_argument("boards", nargs="*")
-    p.add_argument("--no-segq", action="store_true")
+    p.add_argument("--no-segq", action="store_true", help=argparse.SUPPRESS)
     p = sub.add_parser("pins", help="list the pin names a built/shipped firmware accepts")
     p.add_argument("board")
-    p = sub.add_parser("overlay", help="apply/remove the segq overlay in a Klipper tree")
-    g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--apply", action="store_true")
-    g.add_argument("--remove", action="store_true")
+    p = sub.add_parser("clean", help="remove the old segment-queue overlay from a Klipper folder")
     p.add_argument("--klipper-dir")
     args = ap.parse_args(argv)
     try:
@@ -1123,13 +1078,13 @@ def main(argv=None):
             fetch()
             return 0
         if args.cmd == "build":
-            build(args.board, segq=not args.no_segq, menuconfig=args.menuconfig, jobs=args.jobs)
+            build(args.board, menuconfig=args.menuconfig, jobs=args.jobs)
             return 0
         if args.cmd == "flash":
             return flash(args.board, args.artifact, args.method, args.port, args.mount, args.baud,
                          args.dry_run, args.yes)
         if args.cmd == "bundle":
-            bundle(args.boards or None, segq=not args.no_segq)
+            bundle(args.boards or None)
             return 0
         if args.cmd == "pins":
             d = find_latest_artifact(args.board) or find_prebuilt(args.board)
@@ -1138,8 +1093,8 @@ def main(argv=None):
             for n in pins_from_dict(os.path.join(d, "klipper.dict")):
                 say(n)
             return 0
-        if args.cmd == "overlay":
-            return cmd_overlay(args)
+        if args.cmd == "clean":
+            return cmd_clean(args)
     except FwError as e:
         say(f"error: {e}")
         return 2

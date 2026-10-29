@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 """Master tab: flash the ESP32-S3 host (ESP32-S3 only) ("master"): the shipped image or a .bin you supply.
 
+"Flash for my board..." is the one-click path: it reads the chip (esptool flash-id, read-only), picks
+the shipped build that fits its memory (DECKHAND / CAPTAIN / SKIPPER, skipper_esp.choose_tier) and
+flashes it, after one confirmation.
+
 The port box fills itself: it picks the ESP32-S3's own USB port when it can tell (see
 skipper_esp.pick_esp_port) and rescans every 2 s while it is empty. The panel runs
 `skipper_esp.py` (which uses Espressif's esptool) in a subprocess with tag "esp", through
@@ -65,12 +69,21 @@ class MasterPanel(ttk.Frame):
     def _build(self):
         pad = dict(padx=5, pady=2)
         sm = "Small.TButton"
-        ttk.Label(self, text=" ESP32-S3 ONLY. SHIPPED FIRMWARE: WIFI PAGE, CONSOLE, KLIPPER LINK TO PRINTER BOARD ",
+        ttk.Label(self, text=" ESP32-S3 ONLY. THREE BUILDS BY BOARD MEMORY: DECKHAND / CAPTAIN / SKIPPER ",
                   style="Badge.TLabel").pack(anchor="w", padx=6, pady=(4, 2))
         ttk.Label(self, style="Muted.TLabel", wraplength=900, justify="left",
                   text="Shipped image: WiFi SkipperFlipper-XXXX, pages at http://192.168.4.1/, status LED, Klipper "
                        "link to a printer board over UART with printer.cfg LEDs (docs/WIRING_SKR_PICO.md). Own .bin: merged image at 0x0, "
                        "app-only at 0x10000. " + shipped_status_line()).pack(fill="x", padx=8)
+
+        af = ttk.Frame(self)
+        af.pack(fill="x", padx=6, pady=(4, 0))
+        self.btn_auto = ttk.Button(af, text="Flash for my board…", command=self.flash_auto)
+        self.btn_auto.pack(side="left", padx=5, pady=2)
+        ttk.Label(af, style="Muted.TLabel", wraplength=700, justify="left",
+                  text="One click: reads the chip (read-only), picks the build that fits it and flashes it. "
+                       "DECKHAND: any ESP32-S3. CAPTAIN: 4 MB flash + PSRAM (adds WiFi updates, more look-ahead). "
+                       "SKIPPER: 8 MB flash + 8 MB PSRAM (everything, plus RGB).").pack(side="left", padx=4)
 
         tf = ttk.Frame(self)
         tf.pack(fill="x", pady=(2, 0))
@@ -147,6 +160,11 @@ class MasterPanel(ttk.Frame):
                                        filetypes=[("Firmware", "*.bin"), ("All files", "*")])
         if f:
             self.binfile.set(f)
+            kind, ver, want = esp.image_layout(f)   # the right offset, read from the image (2026-10-28)
+            if want:
+                self.offset.set(want)
+                self.app.info(f"{'Full (merged) image' if kind == 'merged' else 'App-only image ' + str(ver)}: "
+                              f"offset set to {want}.")
 
     def use_shipped(self, quiet=False):
         s = esp.shipped_image()
@@ -162,7 +180,8 @@ class MasterPanel(ttk.Frame):
 
     def _buttons(self):
         st = "disabled" if self.running else "normal"
-        for b in (self.btn_check, self.btn_install, self.btn_detect, self.btn_shipped, self.btn_log, self.btn_flash):
+        for b in (self.btn_check, self.btn_install, self.btn_detect, self.btn_shipped, self.btn_log, self.btn_flash,
+                  self.btn_auto):
             b.config(state=st)
         self.btn_stop.config(state="normal" if self.running else "disabled")
 
@@ -227,6 +246,9 @@ class MasterPanel(ttk.Frame):
             shipped = esp.verify_image(f)
             if shipped and self.offset.get().strip() != shipped.get("offset", "0x0"):
                 raise esp.FwError(f"the shipped image must be flashed at {shipped.get('offset', '0x0')}")
+            bad = esp.offset_problem(f, self.offset.get().strip())
+            if bad:
+                raise esp.FwError(bad)
         except (esp.FwError, ValueError) as e:
             messagebox.showerror("Cannot flash", str(e))
             return
@@ -243,6 +265,30 @@ class MasterPanel(ttk.Frame):
             return
         a = ["flash", f, "--port", p, "--chip", self.chip.get(), "--offset", self.offset.get().strip(),
              "--baud", self.baud.get(), "--yes"]
+        if self.erase.get():
+            a.append("--erase")
+        self._after_flash = bool(self._run(a))
+
+    def flash_auto(self):
+        """One click: detect the chip, pick DECKHAND / CAPTAIN / SKIPPER, flash it (one confirmation)."""
+        if self.running:
+            return
+        p = self._need_port()
+        if not p:
+            return
+        tiers = esp.shipped_tiers()
+        if not tiers:
+            messagebox.showerror("No shipped firmware", "This copy has no shipped ESP32-S3 images.")
+            return
+        lines = "\n".join(f"  {info.get('title', t)}: {esp.TIER_NEEDS[t]}" for t, (_p, info) in tiers.items())
+        msg = (f"Port: {p}\n\nThis reads the chip (nothing is written), picks the build that fits its memory and "
+               f"flashes it at 0x0:\n\n{lines}\n\nSettings (WiFi, pins) and printer.cfg are kept. The log shows "
+               "what was found and which build was chosen. Flashing never happens without this confirmation.\n\n"
+               "Continue?")
+        if not messagebox.askokcancel("Flash for my board?", msg, icon="warning", default="cancel"):
+            self.app.info("flash cancelled")
+            return
+        a = ["flash-auto", "--port", p, "--baud", self.baud.get(), "--yes"]
         if self.erase.get():
             a.append("--erase")
         self._after_flash = bool(self._run(a))

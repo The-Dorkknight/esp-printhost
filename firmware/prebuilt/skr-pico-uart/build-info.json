@@ -2,41 +2,33 @@
   "board": "skr-pico-uart",
   "title": "BTT SKR Pico (RP2040, serial UART0, for the ESP32-S3)",
   "preset": "skr-pico-uart.config",
-  "segq": true,
+  "plain_klipper": true,
   "status": "hardware-tested",
   "klipper_tag": "v0.13.0",
   "klipper_commit": "61c0c8d2ef40340781835dd53fb04cc7a454e37a",
   "tool_version": "0.1.0-wip",
-  "built": "2026-10-10T16:57:26",
+  "built": "2026-10-25T09:26:29",
   "primary_artifact": "klipper.uf2",
   "size": {
-    "text": 37616,
+    "text": 36708,
     "data": 0,
     "bss": 1236,
-    "flash_bytes": 37616,
+    "flash_bytes": 36708,
     "ram_bytes": 1236
   },
   "artifacts": {
     "klipper.uf2": {
-      "bytes": 75264,
-      "sha256": "2cb0a93605f16dc941d9d72f14ba1cee6164727b05840ee097ee646d4e5d3669"
+      "bytes": 73728,
+      "sha256": "ba6a2622d67d18b86400e08ac9af00e7b705ba35fc4ce2802d2229588f524a3c"
     },
     "klipper.dict": {
-      "bytes": 10580,
-      "sha256": "29de65e2c87eb7af5877a8b9b662a263d82496c798ba74c00e1d341ea0c0254c"
+      "bytes": 9898,
+      "sha256": "1a82e4e1ac7590be7dd1d21389cd35dec783fc39743fbadd82fc9b5a7efc90c3"
     }
   },
   "source_sha256": {
-    "segq.c": "d931934ee20d80f2e2848486ade3d888bb2f0049d74b53d7e202988c5a22d7e6",
-    "segq_core.c": "11eaeb53fe423c678bfbfdeddda801b2c21ed40738a31bec56d681ed7f2981dc",
-    "segq_core.h": "0f5435ae32670ca73b8bffd1668bf26ed4694fe50b14b2850c682805e75b829b",
     "skr-pico-uart.config": "c36bb2a549da521a2bf053d5486899bc1726b8bbd06ec91bb96e3f5cbaaa7b34"
   },
   "note": "compile-only: this firmware has NOT been verified on hardware",
-  "prebuilt": true,
-  "hardware_test": {
-    "date": "2026-10-11",
-    "summary": "answered an ESP32-S3 over UART0 at 250000 baud (identify, dictionary, get_config, 0 CRC errors) and accepted a Klipper-style config with a NeoPixel on gpio24, which changed colour on command. Motion and the segment queue untested",
-    "log": "docs/HARDWARE_LOG.md"
-  }
+  "prebuilt": true
 }

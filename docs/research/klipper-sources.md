@@ -169,7 +169,7 @@ Fans: gpio17 (`[fan]`), gpio18, gpio20 (`[heater_fan]`s). NeoPixel gpio24.
   project's starting rule, not Klipper's; Klipper's Sensorless_Homing.md tunes by trial.
 - No published current rating for the WEEDO Tina 2 motors was found (2026-10-14 search).
 
-## The SKR Pico firmware is a light fork (noted 2026-10-14)
+## The SKR Pico firmware was a light fork (noted 2026-10-14; since 2026-10-25 plain Klipper, see [segq-retired.md](segq-retired.md))
 
 The shipped `skr-pico-uart` firmware is Klipper v0.13.0 (commit 61c0c8d) plus this project's segment
 queue: three files copied into `src/` (`segq.c`, `segq_core.c`, `segq_core.h`) and one Kconfig option
@@ -200,3 +200,73 @@ between toggle with the cycle set by `set_digital_out_pwm_cycle`.
   Kobra S1 models, plus K3-klipper-mcu (the C board side). A port of the host, not bare-metal firmware.
 - Steamboat Willie (1928) entered the US public domain on 1 January 2024 (Duke Center for the Study of
   the Public Domain); later versions and Disney's trademarks are not affected.
+
+## Micro SD card (added 2026-10-18)
+
+- Pins suggested by Gemini (user's screenshot): GPIO15 CS, 16 SCK, 17 MOSI, 18 MISO, "next to each other in a
+  sequential row" on the ESP32-S3-Zero, citing ESPboards. Checked: Waveshare's ESP32-S3-Zero wiki gives the
+  pinout only as an image (text: WS2812 on GPIO21, UART0 TX 43 / RX 44, GPIO33-37 reserved for octal PSRAM,
+  "14, 15, 16" mentioned as pads for soldering or pogo pins); ESPboards' table lists IO15, IO16, IO21, IO17, IO18
+  in that order with IO21 "not brought out on a pad". The physical order is therefore plausible but NOT
+  confirmed from a written source: the guide tells the user to check the silkscreen.
+- 2026-10-18: default moved to GPIO10 CS, 11 MOSI, 12 SCK, 13 MISO. GPIO18 is one of the small pads under the ESP32-S3-Zero (user). 10-13 are the SPI2 (FSPI) IO_MUX pins on the ESP32-S3 (FSPICS0, FSPID, FSPICLK, FSPIQ in the datasheet IO_MUX table), so the driver uses them directly; any other GPIO works through the GPIO matrix.
+- Common 6-pin micro SD modules: pin order CS, SCK, MOSI, MISO, VCC, GND; the ones with an AMS1117 regulator and
+  a level shifter want 5 V on VCC, bare adapters 3.3 V (general knowledge of these modules, not tested here).
+- ESP-IDF v5.4: `esp_vfs_fat_sdspi_mount`, `SDSPI_HOST_DEFAULT`, `SDSPI_DEVICE_CONFIG_DEFAULT`, `esp_vfs_fat_info`;
+  FATFS long names need `CONFIG_FATFS_LFN_HEAP`; FATFS cannot rename onto an existing file (hence unlink first).
+
+## ESP32-S3 memory tiers (added 2026-10-20)
+
+- eFuse BLOCK1 records the memory inside the chip package: `FLASH_CAP` (3 bits: 1 = 8 MB, 2 = 4 MB) and
+  `PSRAM_CAP` (3 bits, the top one stored separately at bit 179: 1 = 8 MB, 2 = 2 MB, 3 = 16 MB,
+  4 = 4 MB), plus `PSRAM_VENDOR` (AP_3v3 / AP_1v8). Source: ESP-IDF v5.4.1
+  `components/efuse/esp32s3/esp_efuse_table.csv`; esptool v5.5.0 `targets/esp32s3.py`
+  (`get_flash_cap`, `get_psram_cap`) prints the same as "Embedded Flash 4MB (XMC)" /
+  "Embedded PSRAM 2MB (AP_3v3)" on its `Features:` line, and "Detected flash size: 4MB" from the
+  flash chip's JEDEC ID.
+- On the ESP32-S3, 2 MB / 4 MB in-package PSRAM is quad SPI (e.g. ESP32-S3FH4R2), 8 MB and 16 MB are
+  octal (ESP32-S3R8, R8V, R16V; octal uses GPIO33-37). ESP-IDF needs the mode chosen at build time
+  (`CONFIG_SPIRAM_MODE_QUAD` / `_OCT`), which is one reason for separate builds.
+- `CONFIG_SPIRAM_IGNORE_NOTFOUND`: with it a PSRAM build boots without PSRAM (and WiFi / lwIP then
+  use their no-PSRAM buffer sizes). Seen under QEMU 9.0.0 (esp_develop_9.0.0_20240606), which does not
+  emulate the ESP32-S3's PSRAM: "PSRAM ID read error ... Bailing out", then a normal start with 32
+  moves of look-ahead and 8 KB of console history.
+- Cost of PSRAM support without PSRAM: the internal heap region at start-up was 151 KB on CAPTAIN vs
+  159 KB on DECKHAND (QEMU). Hence CAPTAIN is only chosen for boards that report PSRAM.
+- This board (hardware log): esptool detected 4 MB flash; PSRAM not yet read from it (Detect chip in the
+  Flasher shows the Features line). The Waveshare ESP32-S3-Zero uses the ESP32-S3FH4R2 (4 MB flash,
+  2 MB PSRAM) per Waveshare's documentation, so CAPTAIN is the expected pick.
+- QEMU also showed: no output with the console on the USB Serial/JTAG port (QEMU emulates UART0 only;
+  the test builds use `CONFIG_ESP_CONSOLE_UART_DEFAULT`), a hang in the SD card mount (no SPI card
+  emulated; test builds switch the card off), and QEMU itself aborting at `esp_wifi_init` (no WiFi
+  emulated), so QEMU covers start-up up to WiFi only.
+- Found with QEMU: the LED task's 3 KB stack overflowed whenever the LED driver printed an error
+  (`rmt_tx_wait_all_done` timed out there every time). Fixed with a 4 KB stack.
+- Core dump: `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH` + ELF format; a crash of the LED task under QEMU
+  wrote a 28,996-byte dump into the 64 KB partition, and the next start read the task name back with
+  `esp_core_dump_get_summary()`. `esp_core_dump_get_panic_reason()` returned nothing there.
+
+## Slicer upload, OctoPrint style (added 2026-10-20)
+
+- PrusaSlicer and OrcaSlicer upload to an OctoPrint host with `POST /api/files/local` as
+  multipart/form-data (fields `file`, `print`, `path`) and test the connection with `GET /api/version`,
+  expecting JSON with an `api` field and a `text` that starts with "OctoPrint"; the key goes in an
+  `X-Api-Key` header. Checked 2026-10-20 in PrusaSlicer's source,
+  https://github.com/prusa3d/PrusaSlicer/blob/master/src/slic3r/Utils/OctoPrint.cpp (`test()`,
+  `upload_inner_with_host()`: `form_add("print")`, `form_add("path")`, `form_add_file("file")`).
+  OrcaSlicer inherits this code. Not yet tried against a real slicer here.
+- The upload is parsed while it streams (`ph::Multipart`), so the file size is limited only by the SD
+  card. The API key is not checked (see SECURITY.md).
+
+## "Timer too close" and homing (added 2026-10-20)
+
+- Klipper's board firmware shuts down with "Timer too close" when a timer is added for a time that has
+  already passed (src/sched.c, `sched_add_timer`): a command arrived with a clock in the past. Any timed
+  command can cause it: `queue_digital_out`, `endstop_home`, `trsync_start`, the first step after
+  `reset_step_clock`.
+- Klipper's homing checks the endstop once per step time of the fastest stepper:
+  `_calc_endstop_rate()` returns move time / steps (0.001 s if no steps), passed to
+  `home_start(print_time, ENDSTOP_SAMPLE_TIME=.000015, ENDSTOP_SAMPLE_COUNT=4, rest_time)`.
+  Checked 2026-10-20 in https://github.com/Klipper3d/klipper/blob/master/klippy/extras/homing.py.
+  Skipper Flipper used a fixed 100 us before (up to six times as often on the Tina 2's Z).
+

@@ -222,6 +222,11 @@ std::string config_set_option(const std::string& text, const std::string& sectio
         size_t sep = t.find_first_of(":=");
         if (sep != std::string::npos && lower(trim(t.substr(0, sep))) == wkey) {
             lines[size_t(i)] = newline;
+            // drop the old value's continuation lines (a multi-line value such as bed mesh points)
+            size_t j = size_t(i) + 1;
+            while (j < size_t(end) && !lines[j].empty() && isspace((unsigned char)lines[j][0]) &&
+                   !trim(strip_comment(lines[j])).empty())
+                lines.erase(lines.begin() + long(j)), end--;
             std::string out;
             for (auto& l : lines) out += l + "\n";
             return out;

@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 // UART link to the printer board running Klipper firmware built for serial.
 // Uses ph::KLink from host/ (the same code tested on the PC against fake_mcu.py).
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
+#include <sys/stat.h>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -25,11 +28,21 @@
 #include "ph/kboard.h"
 #include "ph/klink.h"
 #include "ph/machine.h"
+#include "sdkconfig.h"
 #include "sf.h"
+#include "esp_cpu.h"
+#if CONFIG_SKIPPER_PRO
+#include "ph/printbench.h"
+#include "../../../host/test/skr_pico_dict.h"   // the SKR Pico's data dictionary, for the board-less benchmark
+#endif
 
 static const char *TAG = "link";
 static const uart_port_t PORT = UART_NUM_1;
 static const uint32_t LINK_STACK = 16384;   // dictionary parsing builds big C++ structures
+// The core the printer link (and SF_BENCH) run on: 1, away from WiFi. (QEMU test builds are
+// single-core, CONFIG_FREERTOS_UNICORE: under QEMU 9.0 every heap walk from core 1 finds the region
+// at 0x3FCE9710 damaged, 2026-10-27, also with the unchanged earlier firmware; real boards are fine.)
+static const int LINK_CORE = 1;
 static SemaphoreHandle_t s_mux;
 // printer.cfg text (stored in NVS), the last check's report, and a reload request.
 static std::string s_cfg_text, s_cfg_report;
@@ -38,7 +51,13 @@ static volatile bool s_cfg_reload;
 static SemaphoreHandle_t s_con_slot, s_con_done;
 static std::string s_con_cmd, s_con_reply;
 static volatile bool s_con_pending;
-static const size_t CFG_MAX = 4096;
+static const size_t CFG_MAX_NVS = 4096;   // where older builds kept it
+// Largest printer.cfg: CONFIG_SKIPPER_CFG_KB at the end of the gcode partition (storage.c), else 4 KB.
+static size_t cfg_max(void)
+{
+    size_t m = sf_cfgstore_max();
+    return m ? m : CFG_MAX_NVS;
+}
 // Defaults shipped by earlier builds. A stored copy that is still exactly one of these (never edited)
 // is replaced by the current default (ph::default_printer_cfg(): heaters, fans, motors, TMC2209).
 static const char *OLD_DEFAULT_CFG_V1 =
@@ -87,9 +106,11 @@ extern "C" bool sf_printing(void)
     return s_printing;
 }
 
-// Reads the uploaded G-code file (storage.c) line by line, inflating it if the browser compressed it.
+// Reads a G-code file line by line: either the one in the flash partition (storage.c, inflated if the
+// browser compressed it) or a plain-text file on the SD card (sdcard.c).
 struct GcodeReader {
     bool open = false, compressed = false, done = false;
+    FILE *fp = nullptr;   // SD card file, or nullptr for the flash partition
     uint32_t src_len = 0, src_pos = 0;
     tinfl_decompressor *d = nullptr;
     uint8_t *dict = nullptr;
@@ -103,6 +124,10 @@ struct GcodeReader {
     {
         free(d);
         free(dict);
+        if (fp) {
+            fclose(fp);
+            fp = nullptr;
+        }
         d = nullptr;
         dict = nullptr;
         open = false;
@@ -112,11 +137,36 @@ struct GcodeReader {
     bool start(std::string &name, std::string *err)
     {
         close();
+        if (!name.empty()) {   // a named file: from the SD card
+            if (!sf_sd_mounted()) {
+                if (err) *err = std::string("no SD card (") + sf_sd_error() + ")";
+                return false;
+            }
+            char path[300];
+            struct stat st;
+            if (!sf_sd_path(name.c_str(), path, sizeof path) || stat(path, &st) != 0) {
+                if (err) *err = "no such file on the SD card: " + name;
+                return false;
+            }
+            fp = fopen(path, "rb");
+            if (!fp) {
+                if (err) *err = "could not open " + name + " on the SD card";
+                return false;
+            }
+            src_len = (uint32_t)st.st_size;
+            src_pos = 0;
+            compressed = false;
+            done = false;
+            in_ofs = in_avail = 0;
+            open = true;
+            return true;
+        }
         char nm[64];
         uint32_t orig = 0;
         bool z = false;
         if (!sf_store_info(nm, sizeof nm, &src_len, &orig, &z)) {
-            if (err) *err = "no G-code file uploaded (Printer page: Upload)";
+            if (err) *err = sf_sd_mounted() ? "which file? Pick one on the Printer page, or SDCARD_PRINT_FILE FILENAME=name.gcode (M20 lists them)"
+                                            : "no G-code file uploaded (Printer page: Upload)";
             return false;
         }
         name = nm;
@@ -140,6 +190,20 @@ struct GcodeReader {
     }
     bool more(std::string *err)
     {
+        if (fp) {
+            size_t n = fread(in, 1, sizeof in, fp);
+            if (n == 0) {
+                if (ferror(fp)) {
+                    if (err) *err = "SD card read failed (card removed?)";
+                    return false;
+                }
+                done = true;
+                return true;
+            }
+            src_pos += (uint32_t)n;
+            buf.append((const char *)in, n);
+            return true;
+        }
         if (!compressed) {
             uint32_t n = src_len - src_pos < sizeof in ? src_len - src_pos : (uint32_t)sizeof in;
             if (n == 0) {
@@ -223,6 +287,7 @@ struct GcodeReader {
 };
 static GcodeReader s_reader;
 static sf_link_info_t s_info;
+static sf_display_t s_disp;   // for the OLED, under s_mux
 static sf_settings_t s_cfg;
 
 const char *sf_link_state_name(sf_link_state_t st)
@@ -233,6 +298,17 @@ const char *sf_link_state_name(sf_link_state_t st)
     case SF_LINK_OK: return "connected";
     default: return "error";
     }
+}
+
+void sf_display_get(sf_display_t *out)
+{
+    if (!s_mux) {
+        memset(out, 0, sizeof *out);
+        return;
+    }
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    *out = s_disp;
+    xSemaphoreGive(s_mux);
 }
 
 void sf_link_get(sf_link_info_t *out)
@@ -265,18 +341,35 @@ extern "C" void sf_printer_cfg_report(char *out, size_t n)
     xSemaphoreGive(s_mux);
 }
 
-extern "C" bool sf_printer_cfg_set(const char *text)
+extern "C" bool sf_printer_cfg_set(const char *text_in)
 {
-    size_t len = strlen(text);
-    if (len > CFG_MAX) {
+    std::string t;   // without carriage returns (a browser sends CRLF line ends)
+    t.reserve(strlen(text_in));
+    for (const char *c = text_in; *c; c++)
+        if (*c != '\r') t += *c;
+    const char *text = t.c_str();
+    size_t len = t.size();
+    if (len > cfg_max()) {
         return false;
     }
-    nvs_handle_t h;
-    if (nvs_open("skipper", NVS_READWRITE, &h) != ESP_OK) {
-        return false;
+    bool ok;
+    if (sf_cfgstore_max()) {
+        ok = sf_cfgstore_put(text, len);
+        if (ok) {   // the old NVS copy is not needed any more (frees NVS space)
+            nvs_handle_t h;
+            if (nvs_open("skipper", NVS_READWRITE, &h) == ESP_OK) {
+                if (nvs_erase_key(h, "printer_cfg") == ESP_OK) nvs_commit(h);
+                nvs_close(h);
+            }
+        }
+    } else {
+        nvs_handle_t h;
+        if (nvs_open("skipper", NVS_READWRITE, &h) != ESP_OK) {
+            return false;
+        }
+        ok = nvs_set_blob(h, "printer_cfg", text, len) == ESP_OK && nvs_commit(h) == ESP_OK;
+        nvs_close(h);
     }
-    bool ok = nvs_set_blob(h, "printer_cfg", text, len) == ESP_OK && nvs_commit(h) == ESP_OK;
-    nvs_close(h);
     if (ok) {
         xSemaphoreTake(s_mux, portMAX_DELAY);
         s_cfg_text = text;
@@ -292,9 +385,9 @@ extern "C" size_t sf_printer_cfg_default(char *out, size_t n)
     return strlen(out);
 }
 
-extern "C" size_t sf_printer_cfg_default_tina2(char *out, size_t n)
+extern "C" size_t sf_printer_cfg_default_ender3(char *out, size_t n)
 {
-    snprintf(out, n, "%s", ph::default_printer_cfg_tina2());
+    snprintf(out, n, "%s", ph::default_printer_cfg_ender3());
     return strlen(out);
 }
 
@@ -325,15 +418,27 @@ extern "C" char *sf_machine_json_dup(void)
 static void cfg_load(void)
 {
     s_cfg_text = ph::default_printer_cfg();
-    nvs_handle_t h;
+    size_t m = sf_cfgstore_max();
+    if (m) {   // since 2026-10-27: the end of the gcode partition
+        std::string t(m + 1, '\0');
+        int n = sf_cfgstore_get(&t[0], t.size());
+        if (n > 0) {
+            t.resize((size_t)n);
+            s_cfg_text = t;
+            return;
+        }
+    }
+    nvs_handle_t h;   // older builds: NVS (moved over the first time it is read)
     if (nvs_open("skipper", NVS_READONLY, &h) != ESP_OK) {
         return;
     }
     size_t len = 0;
-    if (nvs_get_blob(h, "printer_cfg", NULL, &len) == ESP_OK && len > 0 && len <= CFG_MAX) {
+    if (nvs_get_blob(h, "printer_cfg", NULL, &len) == ESP_OK && len > 0 && len <= CFG_MAX_NVS) {
         std::string t(len, '\0');
         if (nvs_get_blob(h, "printer_cfg", &t[0], &len) == ESP_OK) {
             s_cfg_text = (t == OLD_DEFAULT_CFG_V1 || t == OLD_DEFAULT_CFG_V2) ? std::string(ph::default_printer_cfg()) : t;
+            if (m && sf_cfgstore_put(s_cfg_text.data(), s_cfg_text.size()))
+                ESP_LOGW(TAG, "printer.cfg moved from NVS to the gcode partition (now up to %u KB)", (unsigned)(m / 1024));
         }
     }
     nvs_close(h);
@@ -380,7 +485,7 @@ static void copy_str(char *dst, size_t n, const std::string &s)
 // about 11 KB, so it lives on the heap: tinfl_decompress_mem_to_mem() would put it on the task
 // stack, and that overflowed the link task's stack and corrupted the UART driver (field report
 // 2026-10-11: assert in xTaskRemoveFromEventList from uart_write_bytes right after identify).
-static bool inflate_dict(const ph::Bytes &in, std::string &out)
+bool inflate_dict(const ph::Bytes &in, std::string &out)   // also usb_accel.cpp
 {
     tinfl_decompressor *d = (tinfl_decompressor *)malloc(sizeof(tinfl_decompressor));
     if (!d) {
@@ -539,6 +644,198 @@ static int rx_line(void)
     return high ? 1 : 0;
 }
 
+// The CPU cycle counter as a 64-bit count (it is 32 bits and wraps every 18 s at 240 MHz; it is read
+// many times a second, from tasks on core 1 only, so a wrap is never missed). For SF_BENCH.
+static uint64_t perf_cycles(void)
+{
+    static uint32_t last;
+    static uint64_t high;
+    uint32_t c = esp_cpu_get_cycle_count();
+    if (c < last) {
+        high += (uint64_t)1 << 32;
+    }
+    last = c;
+    return high | c;
+}
+static const double PERF_HZ = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1e6;
+
+static void report_cb(const std::string &s) { sf_report("%s", s.c_str()); }
+
+#if CONFIG_SKIPPER_PRO
+// ---- SF_BENCH with no printer board (2026-10-27): the whole motion pipeline on the ESP32 alone,
+// against ph::FakeBoard (commands encoded for the SKR Pico, then dropped), in a task of its own on
+// core 1 while the link has no board.
+static volatile bool s_fbench_running, s_fbench_making, s_fbench_reported;
+static std::string s_fbench_report, s_fbench_file;
+
+// FILE=builtin: the benchmark file made line by line in memory (no SD card needed; the file reading
+// is then not part of the timing). Any other name: the normal reader (SD card or flash).
+static ph::BenchGcode *s_builtin;
+static long s_builtin_n;
+static bool file_open(std::string &name, std::string *e)
+{
+    delete s_builtin;
+    s_builtin = nullptr;
+    if (name == "builtin") {
+        s_builtin = new ph::BenchGcode();
+        s_builtin_n = 0;
+        return true;
+    }
+    return s_reader.start(name, e);
+}
+static bool file_read(std::string &line, bool &eof, std::string *e)
+{
+    if (!s_builtin) return s_reader.line(line, eof, e);
+    eof = !s_builtin->next(line);
+    s_builtin_n++;
+    return true;
+}
+static double file_progress()
+{
+    return s_builtin ? std::min(1.0, s_builtin_n / 9617.0) : s_reader.progress();
+}
+
+// The benchmark file on the SD card, if it is not there yet (a few seconds; a task of its own).
+static void make_bench_file_task(void *)
+{
+    char path[64];
+    snprintf(path, sizeof path, "%s/sf-bench.gcode", SF_SD_ROOT);
+    sf_sd_lock();
+    FILE *f = fopen(path, "w");
+    bool ok = f != nullptr;
+    if (f) {
+        ph::BenchGcode g;
+        std::string l;
+        while (ok && g.next(l)) {
+            l += '\n';
+            ok = fwrite(l.data(), 1, l.size(), f) == l.size();
+        }
+        ok = fclose(f) == 0 && ok;
+    }
+    sf_sd_unlock();
+    if (!ok) unlink(path);
+    sf_report("benchmark file sf-bench.gcode %s the SD card", ok ? "written to" : "could NOT be written to");
+    s_fbench_making = false;
+    vTaskDelete(NULL);
+}
+
+// "" if the file can be read; else the reply (and it is being made, if it can be)
+static std::string bench_file_check(const std::string &cmd)
+{
+    if (cmd.find("FILE=") != std::string::npos) return "";   // the user's choice
+    if (!sf_sd_mounted()) return "";                          // Machine says what is missing
+    char path[64];
+    struct stat st;
+    snprintf(path, sizeof path, "%s/sf-bench.gcode", SF_SD_ROOT);
+    if (stat(path, &st) == 0) return "";
+    if (!s_fbench_making) {
+        s_fbench_making = true;
+        xTaskCreate(make_bench_file_task, "benchfile", 6144, NULL, 2, NULL);
+    }
+    return "ok writing the benchmark file sf-bench.gcode to the SD card (a few seconds): send SF_BENCH again then";
+}
+
+static void fake_bench_task(void *)
+{
+    auto now = []() { return (double)esp_timer_get_time() * 1e-6; };
+    std::string cfg;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    cfg = s_cfg_text;
+    xSemaphoreGive(s_mux);
+    std::string err, report;
+#if CONFIG_SKIPPER_BENCH_AT_BOOT
+    ESP_LOGW(TAG, "benchmark: heap %s", heap_caps_check_integrity_all(true) ? "intact" : "DAMAGED");
+#endif
+    ESP_LOGW(TAG, "benchmark: memory before: %u free, %u in one piece, %u internal",
+             (unsigned)esp_get_free_heap_size(), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    {
+        ph::MsgProto mp;
+        if (!mp.load_dictionary(SKR_PICO_DICT, &err)) {
+            report = "benchmark: the built-in SKR Pico dictionary did not load: " + err;
+        } else {
+            ph::BoardPlan plan = ph::build_board_plan(cfg, mp, 12e6);
+            plan.move_count = 1024;
+            if (!plan.errors.empty()) {
+                report = "benchmark: printer.cfg has errors: " + plan.errors[0];
+            } else {
+                ph::FakeBoard fb(mp);
+                ph::MachineIO io = fb.io(now);
+                io.log = [](const std::string &s) { ESP_LOGW(TAG, "%s", s.c_str()); };
+                io.print_open = file_open;
+                io.print_read = file_read;
+                io.print_progress = file_progress;
+                io.largest_free = []() { return (size_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); };
+                io.lookahead = sf_lookahead_max();
+                io.perf_now = perf_cycles;
+                io.perf_hz = PERF_HZ;
+                s_fbench_reported = false;
+                io.build_id = sf_build_id();
+                io.report = [](const std::string &s) {
+                    sf_report("%s", s.c_str());
+                    s_fbench_reported = true;
+                };
+                ph::Machine m(plan, mp, io);
+                m.start(now());
+                for (int i = 0; i < 20; i++) {   // settle (0.2 s)
+                    m.tick(now());
+                    vTaskDelay(1);
+                }
+                ESP_LOGW(TAG, "benchmark: memory with the machine set up: %u free, %u internal",
+                         (unsigned)esp_get_free_heap_size(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                std::string r = m.command(s_fbench_file, now());
+                if (r.rfind("ok benchmark", 0) != 0) {
+                    report = "benchmark (no printer board): " + r;
+                } else {
+                    while (m.bench_running()) {
+                        m.tick(now());
+                        vTaskDelay(1);
+                    }
+                    report = m.bench_report();
+                }
+                s_reader.close();
+            }
+        }
+    }
+    if (!s_fbench_reported) sf_report("%s", report.c_str());
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    s_fbench_report = report;
+    xSemaphoreGive(s_mux);
+    s_fbench_running = false;
+    vTaskDelete(NULL);
+}
+
+// SF_BENCH / SF_BENCH_RESULT while no board is connected: "" if cmd is neither
+static std::string fake_bench_console(const std::string &cmd)
+{
+    std::string up = cmd.substr(0, cmd.find(' '));
+    for (auto &c : up) c = (char)toupper((unsigned char)c);
+    if (up == "SF_BENCH_RESULT") {
+        if (s_fbench_running) return "ok the benchmark is still running";
+        xSemaphoreTake(s_mux, portMAX_DELAY);
+        std::string r = s_fbench_report;
+        xSemaphoreGive(s_mux);
+        return r.empty() ? "ok no benchmark has run yet (SF_BENCH)" : "ok " + r;
+    }
+    if (up != "SF_BENCH") return "";
+    if (s_fbench_running) return "error: the benchmark is already running (SF_BENCH_RESULT)";
+    std::string fc = bench_file_check(cmd);
+    if (!fc.empty()) return fc;
+    s_fbench_file = cmd;
+    s_fbench_running = true;
+#if CONFIG_FREERTOS_UNICORE
+    if (xTaskCreate(fake_bench_task, "bench", 16384, NULL, 10, NULL) != pdPASS) {
+#else
+    if (xTaskCreatePinnedToCore(fake_bench_task, "bench", 16384, NULL, 10, NULL, LINK_CORE) != pdPASS) {
+#endif
+        s_fbench_running = false;
+        return "error: not enough memory to start the benchmark";
+    }
+    return "ok benchmark running with no printer board (the ESP32 alone: commands encoded, not sent), " SF_MATHS
+           ". About 90 s; SF_BENCH_RESULT, or the important-events log, for the numbers.";
+}
+#endif
+
 static void serve_console(ph::BoardSession &bs, ph::KLink &link)
 {
     if (!s_con_pending) {
@@ -548,9 +845,19 @@ static void serve_console(ph::BoardSession &bs, ph::KLink &link)
     xSemaphoreTake(s_mux, portMAX_DELAY);
     cmd = s_con_cmd;
     xSemaphoreGive(s_mux);
-    std::string reply = bs.machine() ? bs.machine()->command(cmd, link.host_time_s())
-                        : bs.running() ? "error: the board is not configured (" + bs.cfg_msg() + ")"
-                                       : "error: no printer board connected (" + bs.last_error() + ")";
+    std::string reply;
+#if CONFIG_SKIPPER_PRO
+    if (!bs.machine()) {
+        reply = fake_bench_console(cmd);
+    } else if (cmd.rfind("SF_BENCH", 0) == 0 || cmd.rfind("sf_bench", 0) == 0) {
+        reply = cmd.find("RESULT") == std::string::npos && cmd.find("result") == std::string::npos ? bench_file_check(cmd) : "";
+    }
+#endif
+    if (reply.empty()) {
+        reply = bs.machine() ? bs.machine()->command(cmd, link.host_time_s())
+                : bs.running() ? "error: the board is not configured (" + bs.cfg_msg() + ")"
+                               : "error: no printer board connected (" + bs.last_error() + ")";
+    }
     ESP_LOGW(TAG, "console: %s -> %.300s%s", cmd.c_str(), reply.c_str(), reply.size() > 300 ? "..." : "");
     xSemaphoreTake(s_mux, portMAX_DELAY);
     s_con_reply = reply;
@@ -629,14 +936,59 @@ static void link_task(void *arg)
             return true;
         }
         if (e) {
-            *e = t.size() > CFG_MAX ? "printer.cfg would be over 4 KB" : "the chip's storage refused it";
+            *e = t.size() > cfg_max() ? "printer.cfg would be too big (" + std::to_string(cfg_max() / 1024) + " KB max)" : "the chip's storage refused it";
         }
         return false;
     };
+#if CONFIG_SKIPPER_PRO
+    mio.print_open = file_open;   // also FILE=builtin for SF_BENCH
+#else
     mio.print_open = [](std::string &name, std::string *e) { return s_reader.start(name, e); };
+#endif
+    mio.list_files = [](std::vector<std::pair<std::string, uint64_t>> &files, std::string *e) {
+        if (!sf_sd_mounted()) {
+            if (e) *e = std::string("no SD card (") + sf_sd_error() + ")";
+            return false;
+        }
+        files.clear();
+        sf_sd_list([](const char *n, uint64_t sz, void *a) {
+            ((std::vector<std::pair<std::string, uint64_t>> *)a)->push_back({n, sz});
+        }, &files);
+        return true;
+    };
+#if CONFIG_SKIPPER_PRO
+    mio.print_read = file_read;
+    mio.print_progress = file_progress;
+#else
     mio.print_read = [](std::string &line, bool &eof, std::string *e) { return s_reader.line(line, eof, e); };
     mio.print_progress = []() { return s_reader.progress(); };
+#endif
     mio.largest_free = []() { return (size_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); };
+    mio.lookahead = sf_lookahead_max();   // 32, or 256 / 512 on CAPTAIN / SKIPPER with PSRAM
+    mio.perf_now = perf_cycles;           // SF_BENCH timing (2026-10-27)
+    mio.perf_hz = PERF_HZ;
+    mio.report = report_cb;
+    mio.build_id = sf_build_id();
+#if CONFIG_SKIPPER_PRO
+    mio.host_adc = [](int gpio, double &r) {   // [temperature_sensor] on esp32:gpioN (hostadc.c)
+        float f = 0;
+        if (!sf_host_adc(gpio, &f)) return false;
+        r = f;
+        return true;
+    };
+    mio.accel_record = [](int mode, int axis, std::string *e) {
+        char b[160] = "";
+        bool ok = sf_accel_record(mode, axis, b, sizeof b);
+        if (!ok && e) *e = b;
+        return ok;
+    };
+#endif
+    mio.print_ended = [](const std::string &file, const std::string &state, double secs, long lines,
+                         const std::string &msg) {
+        sf_history_add(file.c_str(), state.c_str(), secs, lines, msg.c_str());
+        sf_report("print %s: %s after %.0f s, %ld lines%s%s", state.c_str(), file.c_str(), secs, lines,
+                  msg.empty() ? "" : ": ", msg.c_str());
+    };
 
     ph::BoardSession bs(link, sio, mio);
     s_bs = &bs;
@@ -684,6 +1036,10 @@ static void link_task(void *arg)
         xSemaphoreGive(s_mux);
     };
 
+#if CONFIG_SKIPPER_BENCH_AT_BOOT && CONFIG_SKIPPER_PRO
+    // QEMU test builds: the board-less print benchmark from the built-in file, once at start-up
+    ESP_LOGW(TAG, "start-up: %s", fake_bench_console("SF_BENCH FILE=builtin").c_str());
+#endif
     bool was_running = false;
     uint32_t last_pub = 0;
     for (;;) {
@@ -723,9 +1079,20 @@ static void link_task(void *arg)
             if (running && bs.plan()) {
                 publish_temps(*bs.plan(), bs.cfg_ok());
             }
+            sf_display_t dp = {};
+            if (running && bs.machine()) {
+                ph::Machine::DisplayInfo di = bs.machine()->display_info(link.host_time_s());
+                dp.have_ext = di.have_ext, dp.have_bed = di.have_bed;
+                dp.ext_temp = (float)di.ext_temp, dp.ext_target = (float)di.ext_target;
+                dp.bed_temp = (float)di.bed_temp, dp.bed_target = (float)di.bed_target;
+                strlcpy(dp.state, di.state.c_str(), sizeof dp.state);
+                strlcpy(dp.activity, di.activity.c_str(), sizeof dp.activity);
+                dp.progress = bs.machine()->printing() ? (float)s_reader.progress() : 0.f;
+            }
             std::string js = bs.machine() ? bs.machine()->status_json(link.host_time_s()) : std::string();
             xSemaphoreTake(s_mux, portMAX_DELAY);
             s_machine_json.swap(js);
+            s_disp = dp;
             xSemaphoreGive(s_mux);
             s_printing = bs.machine() && bs.machine()->printing();
             if (!running) {
@@ -735,8 +1102,11 @@ static void link_task(void *arg)
         if (running != was_running) {
             if (!running) {
                 ESP_LOGW(TAG, "printer board lost: %s", bs.last_error().c_str());
+                sf_report("printer board lost: %s", bs.last_error().c_str());
             } else {
                 ESP_LOGW(TAG, "printer board connected (connection %u)", (unsigned)bs.connects());
+                sf_report("printer board connected (connection %u)%s%s", (unsigned)bs.connects(),
+                          bs.cfg_ok() ? "" : "; printer.cfg: ", bs.cfg_ok() ? "" : bs.cfg_msg().c_str());
                 ESP_LOGW(TAG, "link task stack: %u bytes never used (of %u)",
                          (unsigned)uxTaskGetStackHighWaterMark(NULL), (unsigned)LINK_STACK);
             }
@@ -747,6 +1117,7 @@ static void link_task(void *arg)
 
 extern "C" void sf_link_start(const sf_settings_t *s)
 {
+    sf_host_adc_settings(s);
     s_cfg = *s;
     s_mux = xSemaphoreCreateMutex();
     s_con_slot = xSemaphoreCreateMutex();
@@ -777,5 +1148,14 @@ extern "C" void sf_link_start(const sf_settings_t *s)
     // wire or the loopback self-test reads high, so the ESP32 still tries to talk then.
     gpio_pullup_en((gpio_num_t)s->uart_rx);
     s_info.state = SF_LINK_SEARCHING;
-    xTaskCreate(link_task, "link", LINK_STACK, NULL, 4, NULL);
+    // The printer link times every step: it must never wait behind the web server. 2026-10-27, Tina 2:
+    // "Timer too close" twice while the Printer page loaded a G-code preview (a 512 KB read and scan
+    // on the web server, priority 5, with WiFi busy sending): the link task (then priority 4, either
+    // core) was held off long enough for planned steps to go stale. Now: its own core (1; WiFi and
+    // the TCP/IP task stay on core 0) and a priority above the web server.
+#if CONFIG_FREERTOS_UNICORE
+    xTaskCreate(link_task, "link", LINK_STACK, NULL, 10, NULL);
+#else
+    xTaskCreatePinnedToCore(link_task, "link", LINK_STACK, NULL, 10, NULL, LINK_CORE);
+#endif
 }

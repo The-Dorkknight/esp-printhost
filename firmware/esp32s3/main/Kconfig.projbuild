@@ -37,4 +37,69 @@ menu "Skipper Flipper"
         range 0 48
         default 44
 
+    config SKIPPER_SD_DEFAULT
+        bool "SD card on by default (changeable on the /settings page)"
+        default y
+
+    config SKIPPER_TIER
+        string "Build tier: deckhand, captain or skipper (set by tiers/<tier>.defaults)"
+        default "deckhand"
+        help
+            deckhand: any ESP32-S3 (2 MB flash, no PSRAM). captain: 4 MB flash, PSRAM if present,
+            firmware updates over WiFi. skipper: 8 MB flash and 8 MB (octal) PSRAM. Build with
+            build.sh, which builds all three.
+
+    config SKIPPER_OTA
+        bool "Firmware update over WiFi (/update; needs the OTA partition table)"
+        default n
+
+    config SKIPPER_CFG_KB
+        int "Largest printer.cfg in KB (kept at the end of the gcode flash partition)"
+        range 4 64
+        default 8
+        help
+            printer.cfg lives in two copies (written alternately, so a power cut while saving
+            keeps the old one) at the end of the "gcode" partition; the G-code store loses
+            2 x (this + 4) KB. Older builds kept it in NVS (4 KB); it is moved over once.
+
+    config SKIPPER_LOOKAHEAD
+        int "Most moves of motion look-ahead (only used when PSRAM is found)"
+        range 32 1024
+        default 32
+
+    config SKIPPER_LOG_RING_KB
+        int "Live console history in KB (from PSRAM when found, else 8 KB)"
+        range 8 1024
+        default 8
+
+    config SKIPPER_PRO
+        bool "Input shaping, pressure advance, resonance calibration, bed mesh, screw tilt (CAPTAIN+)"
+        default n
+        help
+            Off in DECKHAND (its 2 MB flash is nearly full); on in CAPTAIN and SKIPPER.
+
+    config SKIPPER_HOST_ADC
+        bool "Temperature sensors on the ESP32's own pins (esp32:gpioN, e.g. a chamber thermistor)"
+        default y
+        depends on SKIPPER_PRO
+        help
+            Off only for QEMU test builds: the ADC driver calibrates the ADC at start-up, and QEMU
+            has no ADC, so it would wait forever.
+
+    config SKIPPER_FIXED
+        bool "Integer (int32/int64) motion maths: test build (2026-10-27)"
+        default n
+        depends on SKIPPER_PRO
+        help
+            Input shaping, pressure advance and step times in whole numbers instead of double
+            (software on the ESP32-S3). idf.py -DSF_FIXED=1. Compare with SF_BENCH.
+
+    config SKIPPER_BENCH_AT_BOOT
+        bool "Run the motion benchmark at start-up and print it (QEMU timing runs only)"
+        default n
+
+    config SKIPPER_RGB_SALUTE
+        bool "Rainbow on the colour status LED at start-up"
+        default n
+
 endmenu

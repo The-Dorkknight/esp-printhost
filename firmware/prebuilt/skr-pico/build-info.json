@@ -2,34 +2,31 @@
   "board": "skr-pico",
   "title": "BTT SKR Pico (RP2040, USB)",
   "preset": "skr-pico.config",
-  "segq": true,
+  "plain_klipper": true,
   "status": "compile-only",
   "klipper_tag": "v0.13.0",
   "klipper_commit": "61c0c8d2ef40340781835dd53fb04cc7a454e37a",
   "tool_version": "0.1.0-wip",
-  "built": "2026-10-05T14:57:04",
+  "built": "2026-10-25T09:26:25",
   "primary_artifact": "klipper.uf2",
   "size": {
-    "text": 40152,
+    "text": 39248,
     "data": 0,
     "bss": 1544,
-    "flash_bytes": 40152,
+    "flash_bytes": 39248,
     "ram_bytes": 1544
   },
   "artifacts": {
     "klipper.uf2": {
-      "bytes": 80384,
-      "sha256": "dffcd11693063b991f4444e25d58915e1dcb0707fea83467cad2d04f6ca1d61f"
+      "bytes": 78848,
+      "sha256": "a218069977d02b345ebd3472689dff552efce8de75c67147e711c9b0075867bd"
     },
     "klipper.dict": {
-      "bytes": 10538,
-      "sha256": "42931d4c0e3e3d816b6865986e1d1eb71f90d1e688b68995092fef2a0d18dd49"
+      "bytes": 9856,
+      "sha256": "6d4309b06d96b827000e7cd3d5c70301eaaaf4bf53dbcb87f20cd6530b24efcb"
     }
   },
   "source_sha256": {
-    "segq.c": "d931934ee20d80f2e2848486ade3d888bb2f0049d74b53d7e202988c5a22d7e6",
-    "segq_core.c": "11eaeb53fe423c678bfbfdeddda801b2c21ed40738a31bec56d681ed7f2981dc",
-    "segq_core.h": "0f5435ae32670ca73b8bffd1668bf26ed4694fe50b14b2850c682805e75b829b",
     "skr-pico.config": "e4d29b19cbb621065dedeef11f3fc4fbb904b18f5e006d0a8d8738c384ff94b1"
   },
   "note": "compile-only: this firmware has NOT been verified on hardware",

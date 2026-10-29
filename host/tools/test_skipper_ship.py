@@ -38,7 +38,8 @@ class Shipped(unittest.TestCase):
             d = fw.find_prebuilt(b)
             self.assertTrue(d, f"no shipped firmware for {b}")
             info = fw.read_build_info(d)
-            self.assertTrue(info["segq"])
+            self.assertTrue(info.get("plain_klipper"), f"{b}: shipped firmware is not plain Klipper")
+            self.assertNotIn("segq", info)
             self.assertTrue(info["prebuilt"])
             f = fw.primary_artifact(d, preset["flash_method"])
             self.assertTrue(f and os.path.isfile(f), b)
@@ -48,7 +49,7 @@ class Shipped(unittest.TestCase):
             self.assertGreater(pins["count"], 10)
 
     def test_shipped_firmware_is_not_stale(self):
-        """Fails when firmware/skipper/*.[ch] or a preset .config changed after the prebuilt
+        """Fails when a preset .config changed after the prebuilt
         firmware was made. Fix: python3 host/tools/skipper_fw.py bundle"""
         for b, preset in fw.load_presets().items():
             info = fw.read_build_info(fw.find_prebuilt(b))
@@ -58,17 +59,14 @@ class Shipped(unittest.TestCase):
                              f"{b}: shipped firmware is older than its sources; re-run: "
                              "python3 host/tools/skipper_fw.py bundle")
 
-    def test_source_hashes_cover_overlay_and_preset(self):
-        h = fw.source_hashes(fw.get_preset("skr-pico"))
-        self.assertEqual(sorted(h), sorted(list(fw.OVERLAY_FILES) + ["skr-pico.config"]))
-        with tempfile.TemporaryDirectory() as d:
-            for n in fw.OVERLAY_FILES:
-                write(os.path.join(d, n), b"a")
-            h1 = fw.source_hashes(fw.get_preset("skr-pico"), skipper_dir=d)
-            write(os.path.join(d, "segq.c"), b"b")
-            h2 = fw.source_hashes(fw.get_preset("skr-pico"), skipper_dir=d)
-            self.assertNotEqual(h1["segq.c"], h2["segq.c"])
-            self.assertEqual(h1["segq_core.c"], h2["segq_core.c"])
+    def test_source_hashes_cover_preset_only(self):
+        self.assertEqual(sorted(fw.source_hashes(fw.get_preset("skr-pico"))), ["skr-pico.config"])
+
+    def test_shipped_dictionaries_have_no_segment_queue(self):
+        for b in fw.load_presets():
+            d = json.load(open(os.path.join(fw.find_prebuilt(b), "klipper.dict")))
+            self.assertFalse([c for c in d.get("commands", {}) if "segq" in c], b)
+            self.assertFalse([k for k in d.get("config", {}) if k.startswith("SEGQ")], b)
 
     def test_skr_pico_pin_count_matches_probe(self):
         # mcu_probe --pins read 31 names from the real SKR Pico (older Klipper); same chip family
@@ -80,12 +78,12 @@ class Shipped(unittest.TestCase):
 
     def test_bundle_copies_only_wanted_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            def fake_build(board, segq=True, jobs=None):
+            def fake_build(board, jobs=None):
                 a = os.path.join(tmp, "out", board)
                 write(os.path.join(a, "klipper.uf2"), b"uf2")
                 write(os.path.join(a, "klipper.elf"), b"big")
                 write(os.path.join(a, "klipper.config"), "cfg")
-                json.dump({"board": board, "segq": segq, "primary_artifact": "klipper.uf2",
+                json.dump({"board": board, "plain_klipper": True, "primary_artifact": "klipper.uf2",
                            "artifacts": {"klipper.uf2": {"bytes": 3, "sha256": "x"}, "klipper.elf": {"bytes": 3}}},
                           open(os.path.join(a, "build-info.json"), "w"))
                 json.dump({"enumerations": {"pin": {"gpio0": [0, 2]}}}, open(os.path.join(a, "klipper.dict"), "w"))

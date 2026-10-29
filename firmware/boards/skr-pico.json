@@ -4,8 +4,6 @@
   "description": "BIGTREETECH SKR Pico v1.0: RP2040, USB serial, no bootloader, W25Q080 flash chip. Flash by copying a .uf2 to the RPI-RP2 drive.",
   "mcu_arch": "rp2040",
   "flash_method": "uf2-copy",
-  "dda_hz": 40000,
-  "dda_note": "RP2040 runs Klipper at a 12 MHz timer clock (CLOCK_FREQ from the built .config). 40 kHz DDA = 300 clock ticks per tick; max 20,000 steps/s per axis (2*|steps| <= n), i.e. 250 mm/s at 80 steps/mm. ISR cost is unmeasured.",
   "serial_usb": "USB CDC-ACM serial (appears as /dev/serial/by-id/usb-Klipper_rp2040_*). Baud setting is ignored for USB; hosts usually still pass 250000.",
   "notes": [
     "Compile-only: built in a sandbox with Klipper v0.13.0; never flashed or run on this board by the author.",
@@ -13,18 +11,6 @@
     "UNVERIFIED: whether your particular SKR Pico revision has a W25Q080 flash chip; this follows Klipper's own SKR Pico config header and defaults."
   ],
   "status": "compile-only",
-  "build_sizes": {
-    "segq_on": {
-      "flash_bytes": 40184,
-      "ram_static_bytes": 1544
-    },
-    "segq_off": {
-      "flash_bytes": 39264,
-      "ram_static_bytes": 1544
-    },
-    "flash_delta_bytes": 920,
-    "note": "Klipper v0.13.0, arm-none-eabi/avr gcc from Ubuntu apt, sandbox build. RAM = static data+bss only; the segment queue itself is allocated at run time (depth * sizeof(segment): 24 bytes ARM, 23 bytes AVR)."
-  },
   "sources": [
     "Klipper v0.13.0 config/generic-bigtreetech-skr-pico-v1.0.cfg (header comments: RP2040, USB, copy out/klipper.uf2 in boot mode)",
     "Klipper v0.13.0 src/rp2040/Kconfig (option names, defaults)"

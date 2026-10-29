@@ -4,8 +4,6 @@
   "description": "Creality v4.2.2 / 4.2.7 style boards (Ender-3 V2, Ender-3 S1 older, CR-10 variants): STM32F103, 28 KiB stock bootloader offset, 8 MHz crystal, serial on USART1 PA10/PA9 at 250000 baud, flashed from an SD card.",
   "mcu_arch": "stm32",
   "flash_method": "sdcard-copy",
-  "dda_hz": 25000,
-  "dda_note": "STM32F103 runs at 72 MHz. 25 kHz DDA = 2880 clock ticks per tick; max 12,500 steps/s per axis, i.e. about 156 mm/s at 80 steps/mm. ISR cost is unmeasured.",
   "serial_usb": "USART1 PA10/PA9 at 250000 baud, reached through the board's USB-serial chip (CH340 on most 4.2.x) as /dev/ttyUSB0. The direct USART3 option is NOT in this preset.",
   "notes": [
     "Compile-only: built in a sandbox with Klipper v0.13.0; never flashed or run on this board by the author.",
@@ -15,18 +13,6 @@
     "UNVERIFIED: 4.2.x boards with a non-8 MHz crystal or a different bootloader are not covered."
   ],
   "status": "compile-only",
-  "build_sizes": {
-    "segq_on": {
-      "flash_bytes": 35364,
-      "ram_static_bytes": 1144
-    },
-    "segq_off": {
-      "flash_bytes": 33383,
-      "ram_static_bytes": 1144
-    },
-    "flash_delta_bytes": 1981,
-    "note": "Klipper v0.13.0, arm-none-eabi/avr gcc from Ubuntu apt, sandbox build. RAM = static data+bss only; the segment queue itself is allocated at run time (depth * sizeof(segment): 24 bytes ARM, 23 bytes AVR)."
-  },
   "sources": [
     "Klipper v0.13.0 config/generic-creality-v4.2.7.cfg and config/printer-creality-ender3-v2-2020.cfg (header comments: STM32F103, 28KiB bootloader, USART1 PA10/PA9, copy out/klipper.bin to SD)",
     "Klipper v0.13.0 src/stm32/Kconfig (option names)"

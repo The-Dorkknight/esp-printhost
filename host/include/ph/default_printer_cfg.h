@@ -12,8 +12,8 @@ namespace ph {
 inline const char* default_printer_cfg() {
     return "# printer.cfg for Skipper Flipper (Klipper format), BTT SKR Pico.\n"
            "# Pins from Klipper's SKR Pico sample config. Check sensor_type, run_current and PID values\n"
-           "# for YOUR printer. Used so far: heaters, fans, LED, TMC2209 and motor tests.\n"
-           "# Not yet: moves, homing, printing. Max 4 KB.\n"
+           "# for YOUR printer. This one has no motors set up: add [stepper_*] sections, or load the\n"
+           "# Ender 3 preset as a start. Max 4 KB.\n"
            "# A heater whose thermistor is missing shuts the board down (Klipper's range check):\n"
            "# delete [heater_bed] if no bed thermistor is fitted.\n"
            "[mcu]\nserial: uart\n\n"
@@ -87,6 +87,44 @@ inline const char* default_printer_cfg_tina2() {
            "[fan]\npin: gpio17\n\n"
            "[heater_fan hotend_fan]\npin: gpio18\n\n"
            "[heater_fan fan3]\npin: gpio20\n\n"
+           "[neopixel board_led]\npin: gpio24\nchain_count: 1\ncolor_order: GRB\ninitial_GREEN: 0.15\n";
+}
+
+// Creality Ender 3 with a BTT SKR Pico in place of its board: Klipper's printer-creality-ender3-2018.cfg
+// mechanics (235 x 235 x 250, rotation_distance 40 / 40 / 8, extruder 33.683 (fixed 2026-10-24: was 34.406), EPCOS thermistors,
+// its PID values, speeds) on the SKR Pico's pins from Klipper's generic-bigtreetech-skr-pico-v1.0.cfg,
+// with the Ender 3's own end switches on the SKR Pico's X / Y / Z endstop ports. The preset shipped
+// in the ESP32-S3 firmware (2026-10-20, replacing the Tina 2 one, which is now docs/configs/).
+inline const char* default_printer_cfg_ender3() {
+    return "# printer.cfg: Creality Ender 3 with a BTT SKR Pico + Skipper Flipper. UNTESTED on an Ender 3.\n"
+           "# Mechanics from Klipper's printer-creality-ender3-2018.cfg, pins from its SKR Pico sample.\n"
+           "# End switches: X, Y, Z ports. Before homing, run each motor test: if an axis moves the wrong\n"
+           "# way, add or remove the '!' on its dir_pin. Then PID-tune both heaters. Max 4 KB.\n"
+           "[mcu]\nserial: uart\n\n"
+           "[printer]\nkinematics: cartesian\nmax_velocity: 300\nmax_accel: 3000\nmax_z_velocity: 5\nmax_z_accel: 100\n\n"
+           "[stepper_x]\nstep_pin: gpio11\ndir_pin: !gpio10\nenable_pin: !gpio12\nmicrosteps: 16\n"
+           "rotation_distance: 40\nendstop_pin: ^gpio4\nposition_endstop: 0\nposition_max: 235\nhoming_speed: 50\n\n"
+           "[tmc2209 stepper_x]\nuart_pin: gpio9\ntx_pin: gpio8\nuart_address: 0\nrun_current: 0.580\n"
+           "stealthchop_threshold: 999999\n\n"
+           "[stepper_y]\nstep_pin: gpio6\ndir_pin: !gpio5\nenable_pin: !gpio7\nmicrosteps: 16\n"
+           "rotation_distance: 40\nendstop_pin: ^gpio3\nposition_endstop: 0\nposition_max: 235\nhoming_speed: 50\n\n"
+           "[tmc2209 stepper_y]\nuart_pin: gpio9\ntx_pin: gpio8\nuart_address: 2\nrun_current: 0.580\n"
+           "stealthchop_threshold: 999999\n\n"
+           "[stepper_z]\nstep_pin: gpio19\ndir_pin: gpio28\nenable_pin: !gpio2\nmicrosteps: 16\n"
+           "rotation_distance: 8\nendstop_pin: ^gpio25\nposition_endstop: 0.0\nposition_max: 250\n\n"
+           "[tmc2209 stepper_z]\nuart_pin: gpio9\ntx_pin: gpio8\nuart_address: 1\nrun_current: 0.580\n"
+           "stealthchop_threshold: 999999\n\n"
+           "[extruder]\nstep_pin: gpio14\ndir_pin: !gpio13\nenable_pin: !gpio15\nmicrosteps: 16\n"
+           "rotation_distance: 33.683\nmax_extrude_only_distance: 100.0\nnozzle_diameter: 0.400\nfilament_diameter: 1.750\nheater_pin: gpio23\n"
+           "sensor_type: EPCOS 100K B57560G104F\nsensor_pin: gpio27\ncontrol: pid\n"
+           "pid_Kp: 21.527\npid_Ki: 1.063\npid_Kd: 108.982\nmin_temp: 0\nmax_temp: 250\n\n"
+           "[tmc2209 extruder]\nuart_pin: gpio9\ntx_pin: gpio8\nuart_address: 3\nrun_current: 0.650\n"
+           "stealthchop_threshold: 999999\n\n"
+           "[heater_bed]\nheater_pin: gpio21\nsensor_type: EPCOS 100K B57560G104F\nsensor_pin: gpio26\n"
+           "control: pid\npid_Kp: 54.027\npid_Ki: 0.770\npid_Kd: 948.182\nmin_temp: 0\nmax_temp: 130\n\n"
+           "# FAN0 part cooling (M106/M107); FAN1 hotend fan, on above 50 C\n"
+           "[fan]\npin: gpio17\n\n"
+           "[heater_fan hotend_fan]\npin: gpio18\n\n"
            "[neopixel board_led]\npin: gpio24\nchain_count: 1\ncolor_order: GRB\ninitial_GREEN: 0.15\n";
 }
 

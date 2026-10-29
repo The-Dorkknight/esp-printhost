@@ -123,7 +123,7 @@ class KBoardAgainstFake(unittest.TestCase):
     def test_printer_cfg_and_set_led(self):
         import tempfile
         cfg = ("[mcu]\nserial: /dev/ttyAMA0\n[neopixel board_led]\npin: PA5\ncolor_order: GRB\n"
-               "initial_GREEN: 0.2\n[bed_mesh]\nspeed: 100\n")
+               "initial_GREEN: 0.2\n[filament_switch_sensor runout]\nswitch_pin: PA6\n")
         with tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False) as f:
             f.write(cfg)
         try:
@@ -133,7 +133,7 @@ class KBoardAgainstFake(unittest.TestCase):
         finally:
             os.unlink(f.name)
         self.assertEqual(rc, 0, out)
-        self.assertIn("config note: [bed_mesh] not used yet", out)
+        self.assertIn("config note: [filament_switch_sensor] not used yet", out)
         self.assertIn("SET_LED LED=board_led RED=1 BLUE=0.5 -> ok", out)
         self.assertIn("no LED named 'nope'", out)
         self.assertIn("M999 is not supported yet", out)
@@ -482,6 +482,8 @@ class SessionAgainstFake(unittest.TestCase):
         self.assertRunningAtEnd(out, 1)
         self.assertIn("STATE running (configured)", out)
         self.assertNotIn("RESET", log)
+        # 2026-10-28: the move queue size is read again once configured (Klipper reports 0 before)
+        self.assertIn("board move queue: 1024 commands", out)
 
     def test_board_configured_from_before_is_restarted_first(self):
         # the ESP32 restarted (crash, reflash) while the board kept its configuration
@@ -549,7 +551,7 @@ class StallGuardAgainstFake(unittest.TestCase):
     """STALLGUARD_TEST (added 2026-10-14: sensorless homing did not trigger on the Tina 2). The fake's
     TMC2209 model: SG_RESULT about 240-280 while moving, 0 standing; DIAG = SG_RESULT <= 2 * SGTHRS."""
 
-    def run_sg(self, fake_args=()):
+    def run_sg(self, fake_args=(), cmd="STALLGUARD_TEST STEPPER=stepper_x WIRING=1"):
         import tempfile
         fake = subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "fake_mcu.py")] + list(fake_args),
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -558,7 +560,7 @@ class StallGuardAgainstFake(unittest.TestCase):
         try:
             dev = fake.stdout.readline().strip()
             r = subprocess.run([PROBE, dev, "250000", "--machine", f.name,
-                                "--at", "0.5", "STALLGUARD_TEST STEPPER=stepper_x", "--for", "10"],
+                                "--at", "0.5", cmd, "--for", "10"],
                                capture_output=True, text=True, timeout=120)
         finally:
             os.unlink(f.name)
@@ -578,6 +580,15 @@ class StallGuardAgainstFake(unittest.TestCase):
         self.assertRegex(out, r"with driver_SGTHRS 100 \(triggers at SG_RESULT <= 200\) high in 0 of [1-9]")
         self.assertRegex(out, r"Suggested start: driver_SGTHRS: 7\d ")
         self.assertIn("shutdown: no", out)
+        self.assertNotIn("SHUTDOWN", log)
+
+    def test_default_free_run_only(self):
+        # 2026-10-20: without WIRING=1 there is no SGTHRS-255 phase (it turned DIAG red on the return
+        # stroke and read as a false trigger); the wiring check is the hard-stop test's job now.
+        out, log = self.run_sg(cmd="STALLGUARD_TEST STEPPER=stepper_x")
+        self.assertIn("test sg_stepper_x: passed", out)
+        self.assertNotIn("with 255", out)
+        self.assertRegex(out, r"with driver_SGTHRS 100 \(triggers at SG_RESULT <= 200\) high in 0 of [1-9]")
         self.assertNotIn("SHUTDOWN", log)
 
     def test_missing_jumper(self):

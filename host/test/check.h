@@ -19,3 +19,6 @@ void test_thermistor();  // test_kboard.cpp
 void test_temperature_sensors();  // test_kboard.cpp
 void test_machine();     // test_machine.cpp
 void test_toolhead();    // test_toolhead.cpp
+void test_multipart();   // test_multipart.cpp
+void test_shaping();     // test_shaping.cpp
+void test_resonance();   // test_resonance.cpp

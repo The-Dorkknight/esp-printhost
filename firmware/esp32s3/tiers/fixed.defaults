@@ -1,0 +1,4 @@
+# The int32/int64 motion test build (2026-10-27), layered on a tier (CAPTAIN for now):
+#   idf.py -B build-captain-int -DSF_TIER=captain -DSF_FIXED=1 build
+# Same features as the tier; input shaping, pressure advance and step times in whole numbers.
+CONFIG_SKIPPER_FIXED=y

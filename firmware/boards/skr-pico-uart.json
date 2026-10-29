@@ -4,10 +4,8 @@
   "description": "BIGTREETECH SKR Pico v1.0 with Klipper talking over its UART0 (GPIO0 TX, GPIO1 RX) at 250000 baud instead of USB, so an ESP32-S3 can be wired to it. Flash by copying a .uf2 to the RPI-RP2 drive.",
   "mcu_arch": "rp2040",
   "flash_method": "uf2-copy",
-  "dda_hz": 40000,
-  "dda_note": "RP2040 runs Klipper at a 12 MHz timer clock (CLOCK_FREQ from the built .config). 40 kHz DDA = 300 clock ticks per tick; max 20,000 steps/s per axis (2*|steps| <= n), i.e. 250 mm/s at 80 steps/mm. ISR cost is unmeasured.",
   "notes": [
-    "Hardware-tested on 2026-10-11 for the link and the on-board NeoPixel only: the shipped build answered an ESP32-S3 over UART0 and its RGB LED changed colour on command. Motion, the segment queue and other pins have NOT been tested. See docs/HARDWARE_LOG.md.",
+    "Hardware-tested from 2026-10-11 to 2026-10-20 with the earlier build that still contained the unused segment queue: link, configuration, NeoPixel, thermistors, heaters, PID, TMC2209, motor test and stallGuard. Since 2026-10-25 this preset builds plain Klipper v0.13.0 (the same build minus the unused segment queue); that exact image has not been flashed yet. See docs/HARDWARE_LOG.md.",
     "This firmware does NOT talk over USB. To go back to USB, flash the skr-pico preset again (BOOTSEL + copy).",
     "BOOTSEL: hold the boot button while plugging USB in (or tap RESET while holding it); a drive named RPI-RP2 appears.",
     "Check the TX0/RX0/5V/GND positions on BTT's SKR Pico pinout diagram before wiring; this preset only names the RP2040 pins.",

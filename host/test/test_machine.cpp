@@ -433,7 +433,8 @@ static void test_run_all() {
     if (all->state != "passed") printf("  run all: %s %s\n", all->state.c_str(), all->detail.c_str());
     int passed = 0;
     for (auto& t : m.tests()) passed += t.state == "passed";
-    CHECK(passed == int(m.tests().size()) - 5);   // not part of "all": the bed heater, two PID tunes, two output checks
+    // not part of "all": the bed heater, two PID tunes, two output checks, two resonance tests (CAPTAIN+)
+    CHECK(passed == int(m.tests().size()) - 7);
 }
 
 static void test_pid_calibrate() {
@@ -632,7 +633,7 @@ static void test_calibration_commands() {
     size_t ys = saved.find("[stepper_y]");
     CHECK(saved.find("rotation_distance: 31.5000", ys) < saved.find("[tmc2209 stepper_y]"));
     std::string js = m.status_json(b.now);
-    CHECK(js.find("\"name\":\"stepper_x\"") != std::string::npos && js.find("\"rd\":32.0000,\"spm\":100.000,\"sgthrs\":100") != std::string::npos);
+    CHECK(js.find("\"name\":\"stepper_x\"") != std::string::npos && js.find("\"rd\":32.0000,\"spm\":100.000,\"cur\":") != std::string::npos && js.find("\"sgthrs\":100") != std::string::npos);
     JVal jv;
     CHECK(json_parse(js, jv, &err));
     // a motor test drives the stepper directly: homing or jogging meanwhile is refused (it shut the

@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Matthew Armstrong (https://github.com/The-Dorkknight)
 // SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 #include "ph/boardcfg.h"
+#include "ph/shaping.h"   // PH_PRO
+
+#include <sstream>
 #include <cctype>
 
 #include "ph/config_ini.h"
@@ -66,6 +69,14 @@ HeaterObj* BoardPlan::heater(const std::string& name) {
 FanObj* BoardPlan::fan(const std::string& name) {
     for (auto& f : fans)
         if (f.name == name) return &f;
+    return nullptr;
+}
+
+const MacroObj* BoardPlan::macro(const std::string& name) const {
+    std::string n = name;
+    for (auto& ch : n) ch = char(toupper((unsigned char)ch));
+    for (auto& m : macros)
+        if (m.name == n) return &m;
     return nullptr;
 }
 
@@ -164,6 +175,38 @@ int add_thermistor(Ctx& c, const ConfigSection* s, const std::string& name, bool
         c.plan.skipped_sections.insert(s->name());
         c.plan.notes.push_back("[" + s->name() + "]: sensor_type '" + t.type + "' is not supported yet (thermistors only)");
         return -1;
+    }
+    std::string raw_pin = s->get("sensor_pin", "");
+    std::string rp = lower(raw_pin);
+    if (rp.rfind("esp32:", 0) == 0) {   // on the ESP32-S3 itself
+#if !PH_PRO
+        s->report("sensor_pin '" + raw_pin + "': sensors on the ESP32 itself need the CAPTAIN or SKIPPER build" +
+                  line_ref(s, "sensor_pin"));
+        return -1;
+#endif
+        if (for_heater) {
+            s->report("a heater's sensor must be on the printer board (esp32: pins are for plain temperature sensors)" +
+                      line_ref(s, "sensor_pin"));
+            return -1;
+        }
+        std::string g = rp.substr(6);
+        int n = -1;
+        if (g.rfind("gpio", 0) == 0 && g.size() > 4) n = atoi(g.c_str() + 4);
+        if (n < 1 || n > 10) {
+            s->report("sensor_pin '" + raw_pin + "': ESP32-S3 temperature sensors need an ADC1 pin, esp32:gpio1 to esp32:gpio10 "
+                      "(ADC2 does not work while WiFi is on)" + line_ref(s, "sensor_pin"));
+            return -1;
+        }
+        t.host_gpio = n;
+        t.pin = raw_pin;
+        // A thermistor straight to the ESP32's 3.3 V ADC reads best with a pull-up close to its own value;
+        // Klipper's 4.7 kohm default would read near full scale (above the ADC's ~3.1 V range) at room temperature.
+        th.pullup = s->getf("pullup_resistor", 100000.0, 1.0, 1e9);
+        th.inline_resistor = s->getf("inline_resistor", 0.0, 0.0, 1e9);
+        t.th = th;
+        t.oid = -1;
+        c.plan.sensors.push_back(t);
+        return int(c.plan.sensors.size()) - 1;
     }
     PinSpec ps;
     if (parse_pin(c, s, "sensor_pin", ps, true, false, false)) {
@@ -292,6 +335,26 @@ void build_steppers(Ctx& c) {
         st.microsteps = int(ms);
         st.rotation_distance = s->getf("rotation_distance", 0.0, 0.0, 1e9);
         if (st.rotation_distance <= 0) s->report("rotation_distance must be above 0" + line_ref(s, "rotation_distance"));
+        {   // gear_ratio: "9.5:1" or "50:17, 80:20" (Klipper stepper.py): the motor turns ratio times per rotation_distance
+            std::string gr = s->get("gear_ratio", "");
+            double ratio = 1;
+            bool bad = false;
+            size_t pos = 0;
+            while (!gr.empty() && pos <= gr.size()) {
+                size_t comma = gr.find(',', pos);
+                std::string part = gr.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                size_t colon = part.find(':');
+                char *e1 = nullptr, *e2 = nullptr;
+                double a = colon == std::string::npos ? 0 : strtod(part.c_str(), &e1);
+                double b = colon == std::string::npos ? 0 : strtod(part.c_str() + colon + 1, &e2);
+                if (a <= 0 || b <= 0) { bad = true; break; }
+                ratio *= a / b;
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+            if (bad) s->report("gear_ratio must look like 3:1 or 50:17, 80:20" + line_ref(s, "gear_ratio"));
+            else if (ratio != 1 && st.rotation_distance > 0) st.rotation_distance /= ratio;   // per motor turn
+        }
         st.full_steps = int(s->geti("full_steps_per_rotation", 200, 1, 100000));
         if (st.full_steps % 4) s->report("full_steps_per_rotation must be a multiple of 4" + line_ref(s, "full_steps_per_rotation"));
         double pulse = s->getf("step_pulse_duration", 0.000002, 0.0, 0.001);   // Klipper default without the TMC optimisation
@@ -301,19 +364,21 @@ void build_steppers(Ctx& c) {
             st.endstop_line = s->line_of("endstop_pin");
             st.position_min = s->getf("position_min", 0.0);
             st.position_max = s->getf("position_max");
-            st.position_endstop = st.endstop_spec.empty() ? st.position_min : s->getf("position_endstop");
+            bool probe_es = lower(st.endstop_spec) == "probe:z_virtual_endstop";   // Z homes on the probe
+            st.position_endstop = (st.endstop_spec.empty() || probe_es) ? st.position_min : s->getf("position_endstop");
             st.homing_speed = s->getf("homing_speed", 5.0, 0.001, 1e6);
             st.second_homing_speed = s->getf("second_homing_speed", st.homing_speed / 2, 0.001, 1e6);
             bool sensorless = st.endstop_spec.find("virtual_endstop") != std::string::npos;
             st.homing_retract_dist = s->getf("homing_retract_dist", sensorless ? 0.0 : 5.0, 0.0, 1e6);
             if (s->has("position_max") && st.position_max <= st.position_min)
                 s->report("position_max must be above position_min" + line_ref(s, "position_max"));
-            if (!st.endstop_spec.empty() &&
+            if (!st.endstop_spec.empty() && !probe_es &&
                 (st.position_endstop < st.position_min || st.position_endstop > st.position_max))
                 s->report("position_endstop must be between position_min and position_max" + line_ref(s, "position_endstop"));
             std::string hp = lower(s->get("homing_positive_dir", ""));
             double len = st.position_max - st.position_min;
-            if (hp == "true" || hp == "1") st.homing_positive_dir = true;
+            if (probe_es) st.homing_positive_dir = false;
+            else if (hp == "true" || hp == "1") st.homing_positive_dir = true;
             else if (hp == "false" || hp == "0") st.homing_positive_dir = false;
             else if (st.position_endstop <= st.position_min + len / 4) st.homing_positive_dir = false;
             else if (st.position_endstop >= st.position_max - len / 4) st.homing_positive_dir = true;
@@ -356,6 +421,9 @@ static double tmc_current(int cs, bool vsense, double rsense) {
     return (cs + 1) * vref / (32.0 * r * std::sqrt(2.0));
 }
 
+int tmc2209_cs(double current, bool vsense, double rsense) { return tmc_cs(current, vsense, rsense); }
+double tmc2209_current(int cs, bool vsense, double rsense) { return tmc_current(cs, vsense, rsense); }
+
 bool tmc2209_registers(TmcObj& t, int microsteps, double rotation_distance, int full_steps, double rsense,
                        bool has_stealth, double stealth_velocity, bool interpolate, std::string* err) {
     static const std::map<int, int> MRES = {{256, 0}, {128, 1}, {64, 2}, {32, 3}, {16, 4}, {8, 5}, {4, 6}, {2, 7}, {1, 8}};
@@ -377,7 +445,7 @@ bool tmc2209_registers(TmcObj& t, int microsteps, double rotation_distance, int 
         }
     }
     int ihold = tmc_cs(t.hold_current < t.run_current ? t.hold_current : t.run_current, vsense, rsense);
-    t.irun = irun, t.ihold = ihold, t.vsense = vsense, t.stealthchop = has_stealth;
+    t.irun = irun, t.ihold = ihold, t.vsense = vsense, t.stealthchop = has_stealth, t.rsense = rsense;
     // TPWMTHRS (TMCtstepHelper): 0xfffff = never stealthChop
     uint32_t tpwmthrs = 0xfffff;
     if (has_stealth) {
@@ -505,11 +573,6 @@ int resolve_endstop(Ctx& c, const ConfigSection* s, const std::string& key, cons
 }
 
 void build_motion(Ctx& c) {
-    for (auto& st : c.plan.steppers) {
-        if (!st.has_rail || st.endstop_spec.empty()) continue;
-        const ConfigSection* s = c.cfg.section(st.name);
-        st.endstop = resolve_endstop(c, s, "endstop_pin", st.endstop_spec);
-    }
     if (const ConfigSection* s = c.cfg.section("probe")) {
         ProbeObj& p = c.plan.probe;
         p.present = true;
@@ -520,12 +583,34 @@ void build_motion(Ctx& c) {
         p.speed = s->getf("speed", 5.0, 0.001, 1e6);
         p.lift_speed = s->getf("lift_speed", p.speed, 0.001, 1e6);
     }
+    for (auto& st : c.plan.steppers) {
+        if (!st.has_rail || st.endstop_spec.empty()) continue;
+        const ConfigSection* s = c.cfg.section(st.name);
+        if (lower(st.endstop_spec) == "probe:z_virtual_endstop") {   // Klipper probe.py: Z homes on the probe
+            if (st.name != "stepper_z") {
+                s->report("endstop_pin: probe:z_virtual_endstop is only for stepper_z" + line_ref(s, "endstop_pin"));
+                continue;
+            }
+            if (!c.plan.probe.present || c.plan.probe.endstop < 0) {
+                s->report("endstop_pin: probe:z_virtual_endstop needs a [probe] section" + line_ref(s, "endstop_pin"));
+                continue;
+            }
+            if (s->has("position_endstop"))
+                s->report("position_endstop: not used with probe:z_virtual_endstop (the [probe] z_offset is)" +
+                          line_ref(s, "position_endstop"));
+            st.endstop = c.plan.probe.endstop;
+            st.position_endstop = c.plan.probe.z_offset;   // where the nozzle is when the probe triggers
+            continue;
+        }
+        st.endstop = resolve_endstop(c, s, "endstop_pin", st.endstop_spec);
+    }
     if (const ConfigSection* s = c.cfg.section("printer")) {
         PrinterLimits& pr = c.plan.printer;
         pr.present = true;
         std::string k = lower(s->get("kinematics", "none"));
-        if (k != "cartesian" && k != "none")
-            s->report("kinematics: only cartesian is supported" + line_ref(s, "kinematics"));
+        if (k == "corexy") pr.corexy = true;
+        else if (k != "cartesian" && k != "none")
+            s->report("kinematics: cartesian and corexy are supported" + line_ref(s, "kinematics"));
         pr.max_velocity = s->getf("max_velocity", 0.0, 0.0, 1e6);
         pr.max_accel = s->getf("max_accel", 0.0, 0.0, 1e7);
         if (!c.plan.steppers.empty() && (pr.max_velocity <= 0 || pr.max_accel <= 0))
@@ -537,7 +622,137 @@ void build_motion(Ctx& c) {
     if (const ConfigSection* e = c.cfg.section("extruder")) {
         c.plan.printer.min_extrude_temp = e->getf("min_extrude_temp", 170.0);
         c.plan.printer.max_extrude_only_velocity = e->getf("max_extrude_only_velocity", 0.0, 0.0, 1e6);
+        c.plan.shaping.pa = e->getf("pressure_advance", 0.0, 0.0, 10.0);
+        c.plan.shaping.pa_smooth = e->getf("pressure_advance_smooth_time", 0.040, 0.0, 0.200);
+        if (c.plan.shaping.pa > 0 && c.plan.shaping.pa_smooth <= 0) c.plan.shaping.pa_smooth = 0.040;
+        c.plan.shaping.pa_on = c.plan.shaping.pa > 0;
+#if !PH_PRO
+        if (c.plan.shaping.pa > 0) c.plan.notes.push_back("pressure_advance needs the CAPTAIN or SKIPPER build (ignored)");
+#endif
     }
+#if PH_PRO
+    // "x, y" (or "x,y,z") option values
+    auto nums = [](const ConfigSection* s, const std::string& k, double* out, int n) {
+        std::string v = s->get(k, "");
+        for (auto& ch : v)
+            if (ch == ',') ch = ' ';
+        std::istringstream in(v);
+        int got = 0;
+        double d;
+        while (got < n && in >> d) out[got++] = d;
+        std::string rest;
+        if (got != n || (in >> rest)) {
+            s->report(k + ": needs " + std::to_string(n) + " numbers separated by commas" + line_ref(s, k));
+            return false;
+        }
+        return true;
+    };
+    if (const ConfigSection* s = c.cfg.section("bed_mesh")) {
+        MeshConfig& m = c.plan.mesh;
+        double a[2], b[2], pc[2] = {3, 3};
+        bool ok = nums(s, "mesh_min", a, 2) & nums(s, "mesh_max", b, 2);
+        std::string cnt = s->get("probe_count", "3");
+        if (cnt.find(',') == std::string::npos) pc[0] = pc[1] = atof(cnt.c_str());
+        else ok &= nums(s, "probe_count", pc, 2);
+        if (ok && (pc[0] < 3 || pc[1] < 3 || pc[0] > 10 || pc[1] > 10)) ok = false, s->report("probe_count: 3 to 10 each way" + line_ref(s, "probe_count"));
+        if (ok && (b[0] <= a[0] || b[1] <= a[1])) ok = false, s->report("mesh_max must be above mesh_min" + line_ref(s, "mesh_max"));
+        m.present = ok;
+        m.min_x = a[0], m.min_y = a[1], m.max_x = b[0], m.max_y = b[1];
+        m.count_x = int(pc[0]), m.count_y = int(pc[1]);
+        m.horizontal_move_z = s->getf("horizontal_move_z", 5.0, -10, 1000);
+        m.speed = s->getf("speed", 50.0, 1, 1000);
+        for (auto* k : {"fade_start", "fade_end", "fade_target", "split_delta_z", "move_check_distance", "mesh_pps", "algorithm",
+                        "bicubic_tension", "zero_reference_position", "faulty_region_1_min", "faulty_region_1_max", "scan_overshoot"})
+            if (s->has(k)) s->get(k, "");   // accepted, not used (no fade, bilinear on the probed points)
+    }
+    if (const ConfigSection* s = c.cfg.section("bed_mesh default")) {
+        std::string err;
+        double mnx = s->getf("min_x", 0.0), mxx = s->getf("max_x", 0.0), mny = s->getf("min_y", 0.0), mxy = s->getf("max_y", 0.0);
+        int xc = int(s->getf("x_count", 0.0)), yc = int(s->getf("y_count", 0.0));
+        for (auto* k : {"version", "mesh_x_pps", "mesh_y_pps", "algo", "tension"})
+            if (s->has(k)) s->get(k, "");
+        if (!c.plan.mesh_default.from_profile(s->get("points", ""), xc, yc, mnx, mxx, mny, mxy, &err))
+            s->report("[bed_mesh default]: " + err);
+    }
+    if (const ConfigSection* s = c.cfg.section("screws_tilt_adjust")) {
+        ScrewsConfig& sc = c.plan.screws;
+        for (int i = 1; i < 100; i++) {
+            std::string k = "screw" + std::to_string(i);
+            if (!s->has(k)) break;
+            double xy[2];
+            if (!nums(s, k, xy, 2)) continue;
+            char nm[64];
+            snprintf(nm, sizeof nm, "screw at %.3f,%.3f", xy[0], xy[1]);
+            sc.screws.push_back({s->get(k + "_name", nm), xy[0], xy[1]});
+        }
+        sc.thread = screw_thread_index(s->get("screw_thread", "CW-M3"));
+        if (sc.thread < 0) s->report("screw_thread: CW-M3, CCW-M3, CW-M4, CCW-M4, CW-M5, CCW-M5, CW-M6 or CCW-M6" + line_ref(s, "screw_thread")), sc.thread = 0;
+        sc.horizontal_move_z = s->getf("horizontal_move_z", 10.0, -10, 1000);
+        sc.speed = s->getf("speed", 50.0, 1, 1000);
+        sc.present = sc.screws.size() >= 3;
+        if (!sc.present) s->report("screws_tilt_adjust: needs at least three screws (screw1, screw2, screw3)");
+    }
+    if (const ConfigSection* s = c.cfg.section("firmware_retraction")) {
+        RetractConfig& r = c.plan.retract;
+        r.length = s->getf("retract_length", 0.0, 0.0, 100.0);
+        r.speed = s->getf("retract_speed", 20.0, 0.1, 1000.0);
+        r.unretract_extra = s->getf("unretract_extra_length", 0.0, 0.0, 100.0);
+        r.unretract_speed = s->getf("unretract_speed", 10.0, 0.1, 1000.0);
+    }
+    if (const ConfigSection* s = c.cfg.section("gcode_arcs")) c.plan.arc_resolution = s->getf("resolution", 1.0, 0.01, 100.0);
+    if (const ConfigSection* s = c.cfg.section("resonance_tester")) {
+        ResonanceParams& r = c.plan.resonance;
+        r.min_freq = s->getf("min_freq", 5.0, 1.0, 300.0);
+        r.max_freq = s->getf("max_freq", 135.0, r.min_freq, 300.0);
+        r.accel_per_hz = s->getf("accel_per_hz", 60.0, 1.0, 1000.0);
+        r.hz_per_sec = s->getf("hz_per_sec", 1.0, 0.1, 2.0);
+        r.sweeping_accel = s->getf("sweeping_accel", 400.0, 1.0, 10000.0);
+        r.sweeping_period = s->getf("sweeping_period", 1.2, 0.0, 10.0);
+        if (s->has("probe_points")) {
+            std::string v = s->get("probe_points", "");
+            v = v.substr(0, v.find_first_of(";\n", v.find_first_not_of("\n ")));   // the first point
+            double p[3];
+            for (auto& ch : v)
+                if (ch == ',') ch = ' ';
+            std::istringstream in(v);
+            if (in >> p[0] >> p[1] >> p[2]) {
+                c.plan.resonance_point_set = true;
+                for (int i = 0; i < 3; i++) c.plan.resonance_point[i] = p[i];
+            } else {
+                s->report("probe_points: x, y, z" + line_ref(s, "probe_points"));
+            }
+        }
+        for (auto* k : {"accel_chip", "accel_chip_x", "accel_chip_y", "max_smoothing", "move_speed"})
+            if (s->has(k)) s->get(k, "");
+    }
+    if (const ConfigSection* s = c.cfg.section("input_shaper")) {   // Klipper input_shaper.py
+        ShapingConfig& sc = c.plan.shaping;
+        std::string def = lower(s->get("shaper_type", "mzv"));
+        for (int ax = 0; ax < 2; ax++) {
+            const char* x = ax ? "y" : "x";
+            double f = s->getf(std::string("shaper_freq_") + x, 0.0, 0.0, 1000.0);
+            std::string t = lower(s->get(std::string("shaper_type_") + x, def));
+            double d = s->getf(std::string("damping_ratio_") + x, DEFAULT_DAMPING_RATIO, 0.0, 0.999);
+            std::vector<double> A, T;
+            if (f > 0 && !shaper_def(t, f, d, A, T)) {
+                s->report("unknown shaper_type '" + t + "' (zv, mzv, zvd, ei, 2hump_ei, 3hump_ei)" +
+                          line_ref(s, std::string("shaper_type_") + x));
+                continue;
+            }
+            (ax ? sc.y : sc.x) = f > 0 ? shaper_pulses(A, T) : ShaperPulses();
+            (ax ? sc.y_type : sc.x_type) = t;
+            (ax ? sc.y_freq : sc.x_freq) = f;
+            (ax ? sc.y_damping : sc.x_damping) = d;
+        }
+    }
+#else
+    for (auto* sec : {"input_shaper", "bed_mesh", "bed_mesh default", "screws_tilt_adjust", "firmware_retraction", "gcode_arcs",
+                      "resonance_tester"})
+        if (c.cfg.section(sec)) {
+            c.plan.skipped_sections.insert(sec);
+            c.plan.notes.push_back(std::string("[") + sec + "] needs the CAPTAIN or SKIPPER build");
+        }
+#endif
     if (!c.plan.endstops.empty() && (!c.mp.has_command("config_endstop") || !c.mp.has_command("endstop_home")))
         c.cfg.errors().push_back("this board's firmware has no endstop support");
 }
@@ -573,11 +788,10 @@ void build_fans(Ctx& c) {
 
 // Options Klipper knows for a section kind that this project accepts without using them yet.
 bool known_unused(const std::string& sec, const std::string& key) {
-    static const std::set<std::string> stepper = {"homing_retract_speed", "gear_ratio"};
+    static const std::set<std::string> stepper = {"homing_retract_speed"};
     static const std::set<std::string> extruder = {
         "nozzle_diameter", "filament_diameter", "max_extrude_cross_section", "instantaneous_corner_velocity",
-        "max_extrude_only_distance", "max_extrude_only_velocity", "max_extrude_only_accel", "pressure_advance",
-        "pressure_advance_smooth_time", "min_extrude_temp"};
+        "max_extrude_only_distance", "max_extrude_only_velocity", "max_extrude_only_accel", "min_extrude_temp"};
     static const std::set<std::string> tmc = {};
     static const std::set<std::string> printer = {"minimum_cruise_ratio", "max_accel_to_decel"};
     static const std::set<std::string> probe = {"samples", "sample_retract_dist", "samples_result", "samples_tolerance",
@@ -594,9 +808,66 @@ bool known_unused(const std::string& sec, const std::string& key) {
 }
 
 bool handled_section(const std::string& n) {
-    for (auto* p : {"neopixel ", "temperature_sensor ", "thermistor ", "stepper_", "tmc2209 ", "heater_fan ", "verify_heater "})
+    for (auto* p : {"neopixel ", "temperature_sensor ", "thermistor ", "stepper_", "tmc2209 ", "heater_fan ", "verify_heater ",
+                    "gcode_macro "})
         if (n.rfind(p, 0) == 0) return true;
-    return n == "extruder" || n == "heater_bed" || n == "fan" || n == "printer" || n == "probe";
+    return n == "extruder" || n == "heater_bed" || n == "fan" || n == "printer" || n == "probe" || n == "homing_override" ||
+           n == "input_shaper" || n == "bed_mesh" || n == "bed_mesh default" || n == "screws_tilt_adjust" ||
+           n == "firmware_retraction" || n == "gcode_arcs" || n == "resonance_tester" || n == "exclude_object";
+}
+
+// G-code lines of a macro: comments and blank lines dropped. Klipper's Jinja templates ({...}) are
+// not supported: refused with a clear message instead of running something half-understood.
+std::vector<std::string> macro_lines(const ConfigSection* s, const std::string& what) {
+    std::vector<std::string> out;
+    std::string text = s->get("gcode", "");
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t e = text.find('\n', start);
+        std::string l = text.substr(start, e == std::string::npos ? std::string::npos : e - start);
+        start = e == std::string::npos ? text.size() + 1 : e + 1;
+        size_t c = l.find_first_of(";#");
+        if (c != std::string::npos) l = l.substr(0, c);
+        while (!l.empty() && isspace((unsigned char)l.back())) l.pop_back();
+        size_t b = l.find_first_not_of(" \t");
+        if (b == std::string::npos) continue;
+        l = l.substr(b);
+        if (l.find('{') != std::string::npos || l.find("%}") != std::string::npos) {
+            s->report(what + ": templates ({...}) are not supported yet, only plain G-code lines (line " +
+                      std::to_string(s->line_of("gcode")) + ")");
+            return {};
+        }
+        out.push_back(l);
+    }
+    if (out.empty()) s->report(what + " has no gcode lines");
+    return out;
+}
+
+void build_macros(Ctx& c) {
+    for (auto* s : c.cfg.sections_prefixed("gcode_macro ")) {
+        MacroObj m;
+        m.name = s->name().substr(12);
+        for (auto& ch : m.name) ch = char(toupper((unsigned char)ch));
+        if (m.name.empty() || m.name.find_first_of(" =") != std::string::npos) {
+            s->report("macro name '" + m.name + "' must be one word");
+            continue;
+        }
+        s->get("description", "");
+        m.lines = macro_lines(s, "[" + s->name() + "]");
+        if (!m.lines.empty()) c.plan.macros.push_back(m);
+    }
+    if (const ConfigSection* s = c.cfg.section("homing_override")) {
+        c.plan.homing_override = macro_lines(s, "[homing_override]");
+        std::string ax = s->get("axes", "xyz");
+        for (auto& ch : ax) ch = char(tolower((unsigned char)ch));
+        if (ax.find_first_not_of("xyz") != std::string::npos || ax.empty())
+            s->report("axes must be letters from xyz (line " + std::to_string(s->line_of("axes")) + ")");
+        c.plan.homing_override_axes = ax;
+        for (int a = 0; a < 3; a++) {
+            std::string k = std::string("set_position_") + "xyz"[a];
+            if (s->has(k)) c.plan.homing_override_set[a] = s->getf(k, 0.0, -1e6, 1e6);
+        }
+    }
 }
 
 }  // namespace
@@ -640,6 +911,7 @@ BoardPlan build_board_plan(const std::string& cfg_text, const MsgProto& mp, doub
     build_tmcs(c);
     build_motion(c);
     build_fans(c);
+    build_macros(c);
     if (!plan.sensors.empty()) {
         plan.adc_full_scale = ADC_SAMPLE_COUNT * mp.config_num("ADC_MAX");
         if (plan.adc_full_scale <= 0 || !mp.has_command("config_analog_in") || !mp.has_command("query_analog_in"))
@@ -682,6 +954,7 @@ std::vector<std::string> adc_query_cmds(const BoardPlan& plan, uint32_t start_cl
     uint32_t sample_ticks = uint32_t(ADC_SAMPLE_TIME * clock_freq + 0.5);
     uint32_t rest_ticks = uint32_t(ADC_REPORT_TIME * clock_freq + 0.5);
     for (size_t i = 0; i < plan.sensors.size(); i++) {
+        if (plan.sensors[i].host_gpio >= 0) continue;   // read by the ESP32 (Machine::tick)
         uint32_t clock = start_clock + uint32_t(double(i) * 0.01 * clock_freq);   // stagger like Klipper
         v.push_back("query_analog_in oid=" + std::to_string(plan.sensors[i].oid) + " clock=" + std::to_string(clock) +
                     " sample_ticks=" + std::to_string(sample_ticks) + " sample_count=" + std::to_string(ADC_SAMPLE_COUNT) +

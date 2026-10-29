@@ -548,5 +548,43 @@ class TestCLI(Base):
         self.assertIn("compile-only", o.getvalue())
 
 
+class ImageLayout(unittest.TestCase):
+    """2026-10-28: an app-only CAPTAIN image flashed over USB at 0x10000 left a board not booting. The
+    Flasher now reads what the image is and refuses a wrong offset."""
+
+    def _img(self, merged=False, version=b"0.1.0-wip-captain"):
+        d = bytearray(b"\xff" * (0x9000 if merged else 0x200))
+        d[0] = 0xE9
+        if merged:
+            d[0x8000:0x8002] = b"\xaa\x50"
+        else:
+            d[0x20:0x24] = b"\x32\x54\xcd\xab"
+            d[0x30:0x30 + len(version) + 1] = version + b"\0"
+        f = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+        f.write(d)
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_layouts(self):
+        self.assertEqual(esp.image_layout(self._img(merged=True)), ("merged", None, "0x0"))
+        self.assertEqual(esp.image_layout(self._img()), ("app", "0.1.0-wip-captain", "0x20000"))
+        self.assertEqual(esp.image_layout(self._img(version=b"0.1.0-wip-skipper"))[2], "0x20000")
+        self.assertEqual(esp.image_layout(self._img(version=b"0.1.0-wip-deckhand"))[2], "0x10000")
+        self.assertEqual(esp.image_layout(self._img(version=b"someone-else-1.0"))[2], None)
+
+    def test_wrong_offset_refused(self):
+        app = self._img()
+        self.assertIn("0x20000", esp.offset_problem(app, "0x10000"))
+        self.assertIsNone(esp.offset_problem(app, "0x20000"))
+        self.assertIn("0x0", esp.offset_problem(self._img(merged=True), "0x20000"))
+        with self.assertRaises(FwError):
+            esp.flash(app, "/dev/ttyUSB0", offset="0x10000", dry_run=True)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            esp.flash(app, "/dev/ttyUSB0", offset="0x20000", dry_run=True)
+        self.assertIn("app-only image", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

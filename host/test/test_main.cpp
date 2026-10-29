@@ -335,6 +335,9 @@ int main() {
     test_temperature_sensors();
     test_machine();
     test_toolhead();
+    test_multipart();
+    test_shaping();
+    test_resonance();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

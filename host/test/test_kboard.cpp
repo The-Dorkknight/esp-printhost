@@ -227,7 +227,7 @@ void test_boardcfg() {
     CHECK(mp.load_dictionary(RP_DICT, &err));
     const char* cfg =
         "[mcu]\nserial: /dev/ttyAMA0\n"
-        "[bed_mesh]\nspeed: 100\n"
+        "[filament_switch_sensor runout]\nswitch_pin: gpio16\n"
         "[neopixel board_led]\npin: gpio24\nchain_count: 1\ncolor_order: GRB\n"
         "initial_GREEN: 0.2\n"
         "[neopixel strip]\npin: mcu:gpio5\nchain_count: 3\ncolor_order: RGBW\n";
@@ -238,7 +238,7 @@ void test_boardcfg() {
     CHECK(plan.cmds[0] == "config_neopixel oid=0 pin=gpio24 data_size=3 bit_max_ticks=48 reset_min_ticks=600");
     CHECK(plan.cmds[1] == "config_neopixel oid=1 pin=gpio5 data_size=12 bit_max_ticks=48 reset_min_ticks=600");
     CHECK(plan.neopixels[0].data == std::vector<uint8_t>({51, 0, 0}));   // GRB, green 0.2 -> 51
-    CHECK(plan.notes.size() == 1 && plan.notes[0] == "[bed_mesh] not used yet");
+    CHECK(plan.notes.size() == 1 && plan.notes[0] == "[filament_switch_sensor] not used yet");
     // SET_LED: all LEDs, then one by INDEX
     p = {{"LED", "strip"}, {"RED", "1"}, {"WHITE", "0.5"}};
     std::string msg;

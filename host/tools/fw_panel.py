@@ -74,7 +74,6 @@ class FirmwarePanel(ttk.Frame):
         self.ids = list(self.presets)
         self.titles = [self.presets[i]["title"] for i in self.ids]
         self.board_title = tk.StringVar(value=self.titles[0])
-        self.segq = tk.BooleanVar(value=True)
         self.method = tk.StringVar()
         self.port = tk.StringVar()
         self.mount = tk.StringVar()
@@ -121,7 +120,6 @@ class FirmwarePanel(ttk.Frame):
         self.btn_build = ttk.Button(bf, text="Build", style=sm, command=self.build)
         for b in (self.btn_check, self.btn_fetch, self.btn_menu):
             b.pack(side="left", **pad)
-        ttk.Checkbutton(bf, text="Segment queue", variable=self.segq).pack(side="left", padx=(12, 4), pady=2)
         self.btn_build.pack(side="left", **pad)
         self.btn_stop = ttk.Button(bf, text="Stop", style=sm, command=lambda: self.app.stop("fw"))
         self.btn_stop.pack(side="left", **pad)
@@ -168,7 +166,7 @@ class FirmwarePanel(ttk.Frame):
 
     def board_changed(self):
         p = self.preset
-        self.desc.config(text=f"{p['description']}  DDA {p['dda_hz']} Hz = max {fw.max_step_rate(p['dda_hz'])} steps/s per axis.")
+        self.desc.config(text=p['description'])
         self.badge.config(text=f" {p['status'].upper()} / UNVERIFIED " if p["status"] == "compile-only"
                           else f" {p['status'].upper()} ")
         self.method_box["values"] = fw.methods_for(p)
@@ -218,7 +216,7 @@ class FirmwarePanel(ttk.Frame):
             info = fw.read_build_info(self.latest) or {}
             size = (info.get("size") or {}).get("flash_bytes")
             txt = (f"{kind}: {os.path.basename(self.latest)}  "
-                   f"(segq {'ON' if info.get('segq') else 'OFF'}, klipper {info.get('klipper_tag', '?')}"
+                   f"(plain Klipper {info.get('klipper_tag', '?')}{', old segment queue' if info.get('segq') else ''}"
                    f"{', ' + str(size) + ' bytes' if size else ''})")
         else:
             txt = none
@@ -253,10 +251,7 @@ class FirmwarePanel(ttk.Frame):
         return False
 
     def _build_args(self):
-        a = ["build", self.board]
-        if not self.segq.get():
-            a.append("--no-segq")
-        return a
+        return ["build", self.board]
 
     def check_tools(self):
         self._run(["check", self.board])

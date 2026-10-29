@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include "sf.h"
 
 static const char *TAG = "led";
@@ -20,8 +21,11 @@ static rmt_encoder_handle_t s_enc;
 
 static void ws_send(uint8_t r, uint8_t g, uint8_t b)
 {
-    uint8_t px[3] = {g, r, b};   // standard WS2812 order: green, red, blue
-    if (s_rgb) {                 // some boards' LEDs take red, green, blue
+    // static: the RMT driver reads these bytes while it sends them, possibly after a timeout below
+    // returned (only under QEMU, which has no RMT: on a real chip the 3 bytes take 30 us)
+    static uint8_t px[3];
+    px[0] = g, px[1] = r, px[2] = b;   // standard WS2812 order: green, red, blue
+    if (s_rgb) {                        // some boards' LEDs take red, green, blue
         px[0] = r;
         px[1] = g;
     }
@@ -72,8 +76,29 @@ static void set(bool on, sf_link_state_t st)
     }
 }
 
+#if CONFIG_SKIPPER_RGB_SALUTE
+// SKIPPER builds: a two-second rainbow at start-up. Purely ceremonial.
+static void salute(void)
+{
+    for (int i = 0; i < 120; i++) {
+        int h = (i * 6) % 360, x = (h % 60) * 32 / 60;   // dim: 0..32
+        int r = h < 60 ? 32 : h < 120 ? 32 - x : h < 240 ? 0 : h < 300 ? x : 32;
+        int g = h < 60 ? x : h < 180 ? 32 : h < 240 ? 32 - x : 0;
+        int b = h < 120 ? 0 : h < 180 ? x : h < 300 ? 32 : 32 - x;
+        ws_send((uint8_t)r, (uint8_t)g, (uint8_t)b);
+        vTaskDelay(pdMS_TO_TICKS(16));
+    }
+    ws_send(0, 0, 0);
+}
+#endif
+
 static void led_task(void *arg)
 {
+#if CONFIG_SKIPPER_RGB_SALUTE
+    if (s_type == SF_LED_WS2812) {
+        salute();
+    }
+#endif
     for (;;) {
         sf_link_info_t li;
         sf_link_get(&li);
@@ -117,5 +142,5 @@ void sf_led_start(const sf_settings_t *s)
         return;
     }
     ESP_LOGW(TAG, "status LED: %s on GPIO %d", s_type == SF_LED_PLAIN ? "plain" : "WS2812 colour", s_gpio);
-    xTaskCreate(led_task, "led", 3072, NULL, 2, NULL);
+    xTaskCreate(led_task, "led", 4096, NULL, 2, NULL);   // 4 KB: a driver error message is printed on this stack (found under QEMU, where the RMT never finishes)
 }

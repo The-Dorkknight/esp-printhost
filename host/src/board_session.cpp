@@ -122,6 +122,17 @@ void BoardSession::connect() {
     double at;
     if (link_.get_uptime(c64, at, &err)) clk_.reset(ki.clock_freq, c64, at);
     else clk_.reset(ki.clock_freq, 0, link_.host_time_s());
+    // Klipper boards report their move queue size only once configured (it is set up by
+    // finalize_config; before that get_config says 0), as Klipper's own host reads it: ask again now.
+    // 2026-10-28, Tina 2: read only before configuring, it was 0, the planner assumed a 200-command
+    // queue (the RP2040 has 1024) and held moves back until they were too late to send.
+    if (cfg_ok_) {
+        bool c2 = false, s2 = false;
+        uint32_t crc2 = 0, mc2 = 0;
+        if (link_.get_config(c2, s2, &err, &crc2, &mc2) && mc2) mc = mc2;
+    }
+    if (!mc) log("the board did not report its move queue size: assuming 200 commands");
+    else log("board move queue: " + std::to_string(mc) + " commands");
     plan_->move_count = int(mc);
     if (cfg_ok_) {
         MachineIO mio = base_;

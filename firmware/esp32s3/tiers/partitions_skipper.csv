@@ -1,0 +1,10 @@
+# SKIPPER: 8 MB flash. Two 3 MB app slots for firmware updates over WiFi, NVS where the Deckhand
+# build keeps it (settings survive an upgrade), and a 1.9 MB flash G-code store.
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x6000
+otadata,  data, ota,     0xf000,   0x2000
+phy_init, data, phy,     0x11000,  0x1000
+ota_0,    app,  ota_0,   0x20000,  0x300000
+ota_1,    app,  ota_1,   0x320000, 0x300000
+gcode,    data, 0x40,    0x620000, 0x1c0000
+coredump, data, coredump,0x7e0000, 0x20000

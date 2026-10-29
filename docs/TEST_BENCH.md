@@ -22,6 +22,8 @@ A heater whose thermistor is not fitted shuts the board down as soon as it is co
 check). That is Klipper's behaviour too: remove the `[heater_bed]` section if no bed thermistor is
 fitted.
 
+Input shaper calibration, pressure advance, bed mesh and screw tilt are on the **Tune** page (CAPTAIN and SKIPPER): see [TUNING.md](TUNING.md).
+
 ## The tests
 
 | Test | What it does | Pass means |
@@ -82,6 +84,33 @@ Each sensor has a box five lines tall. Heating: the reading scrolls up, orange. 
 down, purple. At temperature or hot: red, still. Cold: blue, still. Settled, the box is filled with
 the same reading five times. The state is also written underneath in words (and the target and
 heater power), and phones set to reduce motion get no scrolling.
+
+## Motor current and stallGuard sensitivity (2026-10-20)
+
+In **Calibration and stallGuard**, each motor with a `[tmc2209 ...]` section has:
+
+- a **motor current** box (amps RMS) and a **sensitivity** slider and box (`driver_SGTHRS`, 0-255;
+  higher stops more easily). Small motors (the Tina 2's) may need more current before stallGuard sees
+  a stall at all.
+- three yellow buttons, used in order (changed 2026-10-20, late; not yet run on hardware):
+  1. **Hard stop**: the real homing move with the current and sensitivity on screen
+     (`STALLGUARD_HOME STEPPER= SGTHRS= CURRENT=`). Passed = it stopped against the end of the axis after
+     moving at least 1 mm, then backed off 5 mm (Z: 10 mm). "False trigger" = it stopped almost at once:
+     lower the sensitivity. "No stall" = it ran the whole axis length: raise it (or the current).
+     Start with the head in the middle; for Z, clear the bed.
+  2. **Free run**: 10 mm forward and back in the middle of the axis; DIAG must stay quiet. If it goes red
+     here, the setting is too sensitive and homing would stop early.
+  3. **Save**: current and sensitivity into `printer.cfg` in one go (`SAVE_SENSORLESS`, the board restarts).
+- The DIAG box goes red while the driver reports a stall (and stays red 3 s). The free run used to end
+  with a deliberate trigger at 255 to check the DIAG wire, which looked like a false trigger on the
+  return stroke; that check is now only `STALLGUARD_TEST STEPPER=... WIRING=1` in the console.
+
+User's Tina 2 values (2026-10-20): run_current 0.7 A on X, Y, Z; driver_SGTHRS X 32, Y 30, Z 42 (Z
+measured upwards, before Z was changed to home onto the bed).
+
+If the board shuts down with "Timer too close" (or "... in the past"), the shutdown box now also lists
+the timed commands closest to the moment it stopped and how far ahead of their time each was sent,
+which points at the culprit.
 
 ## How it was tested
 

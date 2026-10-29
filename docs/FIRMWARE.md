@@ -1,47 +1,37 @@
-# Firmware (Klipper-based MCU firmware with the segment queue)
+# Firmware: plain Klipper on the printer board, Skipper Flipper on the ESP32-S3
 
-> **Honest status: compile-only.** Every preset below was built in a Linux sandbox
-> with Klipper v0.13.0 and its toolchain. **No firmware here has ever been flashed
-> to or run on a real board.** Pin polarity, timer load, bootloader/flash steps and
-> the DDA step rates are design assumptions until someone tests them. Do not use
-> it on a printer you cannot afford to re-flash through its bootloader.
+> **The printer board runs plain Klipper v0.13.0**, built from the release with only Klipper's own
+> menuconfig choices (chip, flash chip, USB or UART). The ESP32-S3 firmware is the only bespoke part.
+> Status per preset is in its `.json`: `skr-pico-uart` has run in a WEEDO Tina 2 (see HARDWARE_LOG.md;
+> those runs used the 2026-10-10 build, which also held the since-removed, never-used segment queue);
+> the other presets are **compile-only**. Wrong firmware can leave a board unresponsive until it is
+> re-flashed through its bootloader.
 
 ## What is in the repo
 
 | Path | What |
 |---|---|
-| `firmware/skipper/segq_core.[ch]` | Portable segment algorithm (C99), unit tested on a PC. |
-| `firmware/skipper/segq.c` | Klipper glue: commands, DDA timer, step/dir pins (protocol v1, see PROTOCOL.md section 2). |
-| `firmware/boards/<id>.config` + `<id>.json` | Board presets: a Klipper `.config` seed and metadata (description, flash method, recommended DDA rate, notes, sources, build sizes). |
+| `firmware/boards/<id>.config` + `<id>.json` | Board presets: a Klipper `.config` seed (menuconfig choices only) and metadata (description, flash method, notes, sources, status). |
 | `host/tools/skipper_fw.py` | CLI + importable library: check tools, fetch Klipper, build, flash. |
 | `host/tools/fw_panel.py` | The "Firmware" tab of `printhost_gui.py`. |
 | `host/tools/test_skipper_fw.py` | Unit tests of the tooling (no network, no hardware). |
 
 Klipper is not vendored. `fetch` makes a shallow clone of tag **v0.13.0** (commit
-`61c0c8d2ef40...`) into `~/.skipper-flipper/klipper-v0.13.0` and verifies the commit.
-The tool then *overlays* our files into that clone (idempotent, removable):
-
-- copies `segq.c`, `segq_core.c`, `segq_core.h` into Klipper's `src/`;
-- appends `config WANT_SEGQ` (bool, "Skipper Flipper segment queue (experimental)",
-  default y, depends on HAVE_GPIO) to `src/Kconfig`;
-- appends `src-$(CONFIG_WANT_SEGQ) += segq.c segq_core.c` to `src/Makefile`.
-
-Both appended blocks are fenced by `skipper-flipper segq` marker comments, so
-`skipper_fw.py overlay --remove` restores the stock files byte for byte (checked
-with `git status` on a real clone). With the "Segment queue" box off (`--no-segq`)
-the overlay stays but `CONFIG_WANT_SEGQ` is off: the build then has exactly the
-same section sizes as an untouched Klipper (verified for creality-4.2.x and
-ramps-mega2560; the compiled code differs only by the build-time version string).
+`61c0c8d2ef40...`) into `~/.skipper-flipper/klipper-v0.13.0` and verifies the commit. `build`
+writes the preset's `.config` seed, runs Klipper's own `make olddefconfig`, `make clean` and `make`,
+and nothing else: no file in Klipper is added or changed. Before building it checks with
+`git status` that Klipper's `src/`, `lib/`, `scripts/` and `Makefile` are exactly the release and
+refuses otherwise. A Klipper folder from before 2026-10-25 that still holds the old segment-queue
+overlay is cleaned first (also by hand: `skipper_fw.py clean`). The firmware then reports
+`v0.13.0-0-g61c0c8d`, with no "-dirty". Background: [research/segq-retired.md](research/segq-retired.md).
 
 ## Shipped firmware and the Flasher
 
-`firmware/prebuilt/<board>/` holds the firmware built for each preset with the segment
-queue on (Klipper v0.13.0): the flash file (`klipper.uf2`, `klipper.bin` or
+`firmware/prebuilt/<board>/` holds plain Klipper v0.13.0 built for each preset (rebuilt 2026-10-25): the flash file (`klipper.uf2`, `klipper.bin` or
 `klipper.elf.hex`), `klipper.dict`, `pins.json` (pin names the firmware accepts, read
 from the dictionary; this is the chip's pin naming, not a map of your board's connectors)
 and `build-info.json` (SHA-256, sizes, Klipper commit). They were built in the Linux
-sandbox by `skipper_fw.py bundle`, so they carry the same **compile-only** status as the
-presets. `flasher.py` flashes these directly, so Windows and macOS users need no
+sandbox by `skipper_fw.py bundle`. `flasher.py` flashes these directly, so Windows and macOS users need no
 toolchain. "My own build" in the Slave tab uses what you built yourself in
 `~/.skipper-flipper/out/`. Local building needs Linux (or WSL); it is untested on macOS
 and the Build buttons are disabled on Windows.
@@ -54,7 +44,7 @@ macOS by `/Volumes`; both are tested only against mock folders and a mocked Wind
 
 Same as `skr-pico` but Klipper talks on UART0 (GPIO0 TX / GPIO1 RX) at 250000 baud instead of USB,
 as in BTT's own Raspberry Pi UART instructions. Used for the ESP32-S3 link; wiring in
-[WIRING_SKR_PICO.md](WIRING_SKR_PICO.md). Compile-only. After flashing it the board no longer
+[WIRING_SKR_PICO.md](WIRING_SKR_PICO.md). Runs in the Tina 2 (link, heaters, steppers, TMC2209). After flashing it the board no longer
 answers on USB; flash `skr-pico` to go back.
 
 ## ESP32-S3 firmware
@@ -96,9 +86,9 @@ CLI (same code, same output lines):
 python3 host/tools/skipper_fw.py list
 python3 host/tools/skipper_fw.py check [board]        # prints the exact "sudo apt install ..." line
 python3 host/tools/skipper_fw.py fetch
-python3 host/tools/skipper_fw.py build skr-pico [--no-segq] [--menuconfig] [--jobs N]
+python3 host/tools/skipper_fw.py build skr-pico [--menuconfig] [--jobs N]
 python3 host/tools/skipper_fw.py flash skr-pico [--artifact DIR] [--method M] [--port P] [--mount PATH] [--dry-run] [--yes]
-python3 host/tools/skipper_fw.py overlay --apply|--remove [--klipper-dir DIR]
+python3 host/tools/skipper_fw.py clean [--klipper-dir DIR]     # remove the old segment-queue overlay
 ```
 
 Toolchains (Linux Mint/Ubuntu): `printhost.py` offers them as an optional step
@@ -108,29 +98,30 @@ dfu-util avrdude stm32flash` (roughly 140 MB download).
 
 Each build goes to `~/.skipper-flipper/out/<board>-<YYYYmmdd-HHMM>/` with the
 firmware file(s), `klipper.elf`, `klipper.dict`, `klipper.config` (the final
-resolved config) and `build-info.json` (Klipper tag + commit, preset, segq on/off,
+resolved config) and `build-info.json` (Klipper tag + commit, preset, `plain_klipper: true`,
 tool version, flash/RAM size, sha256 of every artifact). Klipper's own `make
 olddefconfig` expands the preset `.config` seed (verified in v0.13.0's Makefile:
 the `.config` rule runs `lib/kconfiglib/olddefconfig.py`), then `make clean` and
-`make` run, so toggling segq never leaves stale objects.
+`make` run, so no stale objects are left from an earlier build.
 
 ## Presets and verification status
 
-All presets: **status compile-only**. Sizes are from the sandbox build (Klipper
-v0.13.0, Ubuntu 24.04 gcc-arm-none-eabi / gcc-avr). "RAM" is static data+bss only;
-the segment queue is allocated at run time (`depth x 24` bytes ARM, `x 23` AVR).
+Sizes are from the 2026-10-25 sandbox build (plain Klipper v0.13.0, Ubuntu 24.04 gcc-arm-none-eabi /
+gcc-avr); "RAM" is static data+bss only.
 
-| Board id | Arch | Flash method | DDA / max steps/s per axis | Flash B, stock | Flash B, segq (delta) | Static RAM B |
-|---|---|---|---|---|---|---|
-| `creality-4.2.x` | stm32 | sdcard-copy | 25000 Hz / 12500 | 33383 | 35364 (+1981) | 1144 |
-| `ender3-1.1.x` | avr | avrdude | 8000 Hz / 4000 | 35500 | 38982 (+3482) | 417 |
-| `generic-rp2040` | rp2040 | uf2-copy | 40000 Hz / 20000 | 39264 | 40184 (+920) | 1544 |
-| `ramps-mega2560` | avr | avrdude | 10000 Hz / 5000 | 36272 | 39774 (+3502) | 418 |
-| `skr-pico` | rp2040 | uf2-copy | 40000 Hz / 20000 | 39264 | 40184 (+920) | 1544 |
+| Board id | Arch | Flash method | Status | Flash bytes | Static RAM bytes |
+|---|---|---|---|---|---|
+| `creality-4.2.x` | stm32 | sdcard-copy | compile-only | 33363 | 1144 |
+| `ender3-1.1.x` | avr | avrdude | compile-only | 35482 | 417 |
+| `generic-rp2040` | rp2040 | uf2-copy | compile-only | 39248 | 1544 |
+| `ramps-mega2560` | avr | avrdude | compile-only | 36252 | 418 |
+| `skr-pico` | rp2040 | uf2-copy | compile-only | 39248 | 1544 |
+| `skr-pico-uart` | rp2040 | uf2-copy | hardware-tested (earlier build) | 36708 | 1236 |
 
 - **skr-pico**, **generic-rp2040**: RP2040, USB serial, no bootloader, W25Q080
   flash chip (Klipper defaults; same header comments as Klipper's SKR Pico config).
   Unverified: that your board's flash chip is compatible with the W25Q080 setting.
+  `generic-rp2040` is also the firmware for a Klipper USB accelerometer (RP2040 + ADXL345).
 - **creality-4.2.x**: STM32F103, 28 KiB bootloader offset, 8 MHz crystal, USART1
   PA10/PA9 at 250000 baud (from the header of Klipper's `generic-creality-v4.2.7.cfg`).
   Unverified: clone chips (GD32F103 etc.) and other bootloaders.
@@ -141,24 +132,8 @@ the segment queue is allocated at run time (`depth x 24` bytes ARM, `x 23` AVR).
 
 Every option name in the `.config` seeds was checked against Klipper v0.13.0's
 `src/*/Kconfig`, and the resolved `.config` of each build was inspected (MCU,
-clock, flash offset, serial settings, `CONFIG_WANT_SEGQ`). The built
-`klipper.dict` of every segq build contains the five commands and two responses.
-That only shows the config is accepted and the code compiles, not that it works.
-
-## dda_hz and top speed
-
-`config_segq period` is `CLOCK_FREQ / dda_hz` MCU clock ticks. Because a segment
-must satisfy `2*|steps| <= n`, an axis can step at most once every two DDA ticks:
-
-    max step rate per axis = dda_hz / 2
-    max speed (mm/s)       = dda_hz / 2 / steps_per_mm
-
-e.g. 40 kHz on an RP2040 (12 MHz Klipper clock, period 300) gives 20,000 steps/s,
-250 mm/s at 80 steps/mm; 10 kHz on the AVR gives 5,000 steps/s (62 mm/s). The
-recommended values are deliberately conservative guesses (the ISR cost, especially
-on 8-bit AVR with 32-bit per-axis accumulators, has not been measured); each preset
-`.json` explains its number. If the board shuts down with "segq DDA timer too
-slow", lower `dda_hz`.
+clock, flash offset, serial settings). A test checks that no shipped dictionary has a `segq`
+command and that each build is marked plain Klipper.
 
 ## Flashing
 
@@ -177,20 +152,14 @@ re-flashed through its bootloader (or an ISP/SWD programmer if there is none).
 
 ## Tests without hardware
 
-- `python3 host/tools/test_skipper_fw.py`: the tooling (presets, overlay, mounts,
-  flash plans/refusals, artifacts).
-- `python3 host/tools/test_fake_mcu.py`: protocol v1 against the simulator.
-- `firmware/test/run.sh`: compiles the real `segq.c` glue + core on a PC against a
-  small mock of the Klipper API and drives the DDA timer in simulated time (pulse
-  width, dir pins, inversion, idle stop/restart, underruns, start threshold, stop,
-  error shutdowns, late-timer shutdown). It proves the glue logic only; the mock
-  is not Klipper and has no real interrupts.
+- `python3 host/tools/test_skipper_fw.py`: the tooling (presets, plain-Klipper check and the
+  old-overlay clean-up, mounts, flash plans/refusals, artifacts).
+- `python3 host/tools/test_skipper_ship.py`: the shipped firmware (hashes, plain Klipper, pins).
+- `python3 host/tools/test_fake_mcu.py`: the simulated board (plain Klipper commands).
 
 ## Not done / open items
 
-- Nothing has run on hardware (see the banner above).
-- No sync pin actions and no DDA endstop homing in v1 (PROTOCOL.md).
-- DDA ISR cost on AVR is unmeasured; the AVR presets use a conservative 8-10 kHz.
+- Only `skr-pico-uart` has run on hardware, and with the earlier build (see the banner above).
 - Bootloader/flash details for individual boards are taken from Klipper's own
   comments; revisions in the wild differ.
 - No STM32 USB-DFU, dfu-util or stm32flash flashing method yet (the tools are

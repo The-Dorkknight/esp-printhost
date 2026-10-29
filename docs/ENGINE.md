@@ -2,7 +2,8 @@
 
 Files: `host/include/ph/planner.h`, `host/src/planner.cpp` (look-ahead planner),
 `host/include/ph/engine.h`, `host/src/engine.cpp` (G-code interpreter),
-`host/test/segq_sim.h` + `host/test/test_engine.cpp` (tests).
+`host/test/segq_sim.h` + `host/test/test_engine.cpp` (tests). The planner's segments go to the
+toolhead, which turns them into Klipper `queue_step` commands.
 Work in progress (0.1.0-wip). Nothing here has run on hardware.
 
 ## Pipeline
@@ -72,7 +73,7 @@ parse failures and bad checksums add an entry to `warnings()`; nothing throws.
 
 ## Testing
 
-`host/test/test_engine.cpp` runs every program through the real `segq_core` (`segq_sim.h`,
+`host/test/test_engine.cpp` runs every program through `segq_core` (a test-only step replay since 2026-10-25, `segq_sim.h`,
 queue depth respected) and checks: exact final step position on all axes (square, fuzz,
 10,000 x 0.01 mm drift test); motion profile reconstructed from step timestamps only (peak,
 ~10 ms-window acceleration, cruise, triangle, duration within tolerance); collinear / 90

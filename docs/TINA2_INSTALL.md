@@ -7,7 +7,12 @@ Stay with the printer, keep a hand near the power switch and the page's **STOP E
 
 ## What you get
 
-- `printer.cfg` preset **WEEDO Tina 2 with an SKR Pico** (config page: "Load a default"): Tina 2
+- **2026-10-20 (late): the Tina 2 config is a file now, not a preset on the ROM** (the ROM's default is an
+  Ender 3). Open [configs/tina2-skr-pico.cfg](configs/tina2-skr-pico.cfg), copy it all into the
+  printer.cfg page and Save. It has the tuned values (0.7 A, X flipped) and homes Z down onto the bed,
+  then lifts 10 mm (`[homing_override]`; needs firmware from 2026-10-20 late or newer). What follows
+  describes the older preset:
+- `printer.cfg` preset **WEEDO Tina 2 with an SKR Pico**: Tina 2
   mechanics from the community Tina 2 Klipper config (X/Y `rotation_distance` 32, Z 8, extruder 33.725,
   EPCOS 100K thermistor, PID 41.141 / 2.716 / 155.822, 97 mm/s, 1000 mm/s²), SKR Pico pins, and a
   **smaller build volume for the larger printhead: X 5-85, Y 0-105, Z -2-80 mm** (stock 97 x 120 x 91).
@@ -50,8 +55,10 @@ Stay with the printer, keep a hand near the power switch and the page's **STOP E
   button "Endstops?") shows whether they read.
 - The Tina 2's stock connectors may not match the SKR Pico's; check each plug's pin order before
   powering up (motor coils in pairs, thermistor polarity does not matter, fans and heater do).
-- The Tina 2 (not the Tina 2S) has no heated bed, so the preset has no `[heater_bed]`; bed commands
-  in G-code files are skipped.
+- Heated bed: the stock Tina 2 has none, but the author's has one (about 120 x 120 mm), so
+  `docs/configs/tina2-skr-pico.cfg` has a `[heater_bed]` on the SKR Pico's HB output (gpio21) and
+  THB thermistor (gpio26) since 2026-10-27. Without a bed, delete that section; bed commands in G-code
+  files are then skipped.
 
 ## Step by step
 

@@ -9,10 +9,10 @@ namespace ph {
 
 enum Axis { AX_X = 0, AX_Y, AX_Z, AX_E, NUM_AXES };
 
-// A segment as sent to the MCU (see docs/PROTOCOL.md, segq_push). Rules enforced
-// by the MCU: 1 <= n <= 2^30 and 2*|steps[axis]| <= n.
+// A constant-speed piece of motion from the planner; the toolhead turns it into step times for
+// Klipper's queue_step. Rules: 1 <= n <= 2^30 and 2*|steps[axis]| <= n.
 struct Segment {
-    uint32_t n = 0;                 // duration in DDA ticks (see firmware/skipper/segq_core.h)
+    uint32_t n = 0;                 // duration in planner ticks (1/40000 s by default)
     int32_t  steps[NUM_AXES] = {};  // signed step counts
     uint8_t  flags = 0;             // SEG_SYNC | SEG_LAST
     uint16_t tag = 0;

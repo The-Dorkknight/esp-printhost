@@ -1,0 +1,28 @@
+# CAPTAIN Edition PRO MAX Turbo Ultra: ESP32-S3 with 4 MB flash or more (e.g. ESP32-S3FH4R2 on the
+# Waveshare ESP32-S3-Zero: 4 MB flash + 2 MB quad PSRAM). Layered on top of ../sdkconfig.defaults.
+CONFIG_SKIPPER_TIER="captain"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="tiers/partitions_captain.csv"
+# Quad PSRAM if the chip has it; boots normally without (the extras that need it stay off)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# Firmware updates over WiFi, with roll-back: a new build that crashes before it has run for
+# 30 s is replaced by the previous one at the next restart.
+CONFIG_SKIPPER_OTA=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_SKIPPER_LOOKAHEAD=256
+CONFIG_SKIPPER_LOG_RING_KB=64
+# Input shaping, pressure advance, resonance calibration, bed mesh, screw tilt, arcs... (2026-10-24)
+CONFIG_SKIPPER_PRO=y
+# printer.cfg up to 16 KB (2026-10-27; DECKHAND: 8 KB)
+CONFIG_SKIPPER_CFG_KB=16
+# 2026-10-27: bigger caches (they come out of internal RAM, which the PSRAM builds can spare): fewer
+# stalls fetching code and data from flash / PSRAM, the main reason the real chip is 2.5-3x slower
+# than QEMU's instruction count.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+# Error names in messages ("ESP_ERR_TIMEOUT" rather than 0x107); DECKHAND leaves them out for space
+CONFIG_ESP_ERR_TO_NAME_LOOKUP=y

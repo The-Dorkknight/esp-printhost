@@ -9,6 +9,8 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -58,13 +60,14 @@ class PresetTests(unittest.TestCase):
                 # every hardware claim must also be in the hardware log, by preset id
                 log = open(os.path.join(fw.REPO_ROOT, "docs", "HARDWARE_LOG.md"), encoding="utf-8").read()
                 self.assertIn(k, log, f"{k} is marked hardware-tested but docs/HARDWARE_LOG.md does not mention it")
-            self.assertNotIn("CONFIG_WANT_SEGQ", p["config_text"])
+            self.assertNotIn("WANT_SEGQ", p["config_text"])
+            self.assertFalse([x for x in p if x.startswith("dda") or x == "build_sizes"], k)
 
     def test_validation_catches_problems(self):
         good = {k: v for k, v in fw.load_presets()["skr-pico"].items() if k not in ("config_text", "config_path")}
         cfg = "CONFIG_MACH_RP2040=y\n"
         self.assertEqual(fw.validate_preset(good, cfg), [])
-        for key, bad in (("flash_method", "teleport"), ("mcu_arch", "z80"), ("dda_hz", 0), ("dda_hz", "40000"),
+        for key, bad in (("flash_method", "teleport"), ("mcu_arch", "z80"),
                          ("status", "hardware-verified"), ("id", "Bad Id"), ("sources", [])):
             m = dict(good, **{key: bad})
             self.assertTrue(fw.validate_preset(m, cfg), key)
@@ -72,21 +75,34 @@ class PresetTests(unittest.TestCase):
         del m["notes"]
         self.assertTrue(fw.validate_preset(m, cfg))
         self.assertTrue(fw.validate_preset(good, "CONFIG_MACH_AVR=y\n"))               # arch mismatch
-        self.assertTrue(fw.validate_preset(good, cfg + "CONFIG_WANT_SEGQ=y\n"))        # pinned segq
+        self.assertTrue(fw.validate_preset(good, cfg + "CONFIG_WANT_SEGQ=y\n"))        # the retired segq
+        self.assertTrue(fw.validate_preset(good, cfg + "# CONFIG_WANT_SEGQ is not set\n"))
         self.assertTrue(fw.validate_preset(dict(good, status="hardware-tested"), cfg))  # needs tested_on
         self.assertEqual(fw.validate_preset(dict(good, status="hardware-tested", tested_on="x"), cfg), [])
         av = dict(good, flash_method="avrdude")
         self.assertTrue(fw.validate_preset(av, cfg))
-
-    def test_max_step_rate(self):
-        self.assertEqual(fw.max_step_rate(40000), 20000)
 
     def test_unknown_board(self):
         with self.assertRaises(fw.FwError):
             fw.get_preset("nope")
 
 
-class OverlayTests(unittest.TestCase):
+OLD_KCONFIG_BLOCK = (fw.KCONFIG_BEGIN + "\nconfig WANT_SEGQ\n    bool \"Skipper Flipper segment queue (experimental)\"\n"
+                     "    default y\n    depends on HAVE_GPIO\n" + fw.KCONFIG_END + "\n")
+OLD_MAKEFILE_BLOCK = fw.KCONFIG_BEGIN + "\nsrc-$(CONFIG_WANT_SEGQ) += segq.c segq_core.c\n" + fw.KCONFIG_END + "\n"
+
+
+def add_old_overlay(k):
+    """What the tool used to do to a Klipper tree before 2026-10-25."""
+    for n, block in (("Kconfig", OLD_KCONFIG_BLOCK), ("Makefile", OLD_MAKEFILE_BLOCK)):
+        p = os.path.join(k, "src", n)
+        write(p, read(p) + "\n" + block)
+    for n in fw.LEGACY_OVERLAY_FILES:
+        write(os.path.join(k, "src", n), "// old\n")
+
+
+class PlainKlipperTests(unittest.TestCase):
+    """Builds are plain Klipper: the old segment-queue overlay is removed from existing trees."""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.k = fake_klipper(os.path.join(self.tmp.name, "k"))
@@ -95,38 +111,47 @@ class OverlayTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_apply_is_idempotent(self):
-        ch = fw.apply_overlay(self.k)
-        self.assertIn("src/Kconfig", ch)
-        self.assertTrue(fw.overlay_status(self.k))
-        snap = {n: read(os.path.join(self.k, "src", n)) for n in ("Kconfig", "Makefile", "segq.c")}
-        self.assertEqual(snap["Kconfig"].count("config WANT_SEGQ"), 1)
-        self.assertEqual(snap["Makefile"].count("segq_core.c"), 1)
-        self.assertIn("depends on HAVE_GPIO", snap["Kconfig"])
-        self.assertIn("Skipper Flipper segment queue (experimental)", snap["Kconfig"])
-        self.assertIn("src-$(CONFIG_WANT_SEGQ) += segq.c segq_core.c", snap["Makefile"])
-        self.assertEqual(fw.apply_overlay(self.k), [])
-        for n in snap:
-            self.assertEqual(read(os.path.join(self.k, "src", n)), snap[n])
+    def test_clean_tree_is_left_alone(self):
+        self.assertFalse(fw.legacy_overlay_present(self.k))
+        self.assertEqual(fw.remove_legacy_overlay(self.k), [])
 
-    def test_remove_restores_original(self):
-        fw.apply_overlay(self.k)
-        fw.remove_overlay(self.k)
-        self.assertFalse(fw.overlay_status(self.k))
+    def test_old_overlay_removed_without_git(self):
+        add_old_overlay(self.k)
+        self.assertTrue(fw.legacy_overlay_present(self.k))
+        ch = fw.remove_legacy_overlay(self.k)
+        self.assertIn("src/Kconfig", ch)
+        self.assertIn("src/segq.c", ch)
+        self.assertFalse(fw.legacy_overlay_present(self.k))
         for n, t in self.orig.items():
             self.assertEqual(read(os.path.join(self.k, "src", n)), t)
-        for n in fw.OVERLAY_FILES:
-            self.assertFalse(os.path.exists(os.path.join(self.k, "src", n)))
-        self.assertEqual(fw.remove_overlay(self.k), [])   # twice is fine
+        self.assertEqual(fw.remove_legacy_overlay(self.k), [])   # twice is fine
 
-    def test_reapply_after_source_change(self):
-        fw.apply_overlay(self.k)
-        write(os.path.join(self.k, "src", "segq.c"), "// stale\n")
-        self.assertEqual(fw.apply_overlay(self.k), ["src/segq.c"])
+    def _git(self, *a):
+        subprocess.run(["git", "-C", self.k, "-c", "user.name=t", "-c", "user.email=t@t"] + list(a),
+                       check=True, capture_output=True)
 
-    def test_not_klipper(self):
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_old_overlay_removed_from_git_checkout_exactly(self):
+        self._git("init", "-q")
+        self._git("add", "-A")
+        self._git("commit", "-qm", "klipper")
+        add_old_overlay(self.k)
         with self.assertRaises(fw.FwError):
-            fw.apply_overlay(self.tmp.name)
+            fw.check_plain(self.k)
+        fw.remove_legacy_overlay(self.k)
+        fw.check_plain(self.k)                 # byte-identical to the commit again
+        for n, t in self.orig.items():
+            self.assertEqual(read(os.path.join(self.k, "src", n)), t)
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_local_edit_refuses_build(self):
+        self._git("init", "-q")
+        self._git("add", "-A")
+        self._git("commit", "-qm", "klipper")
+        p = os.path.join(self.k, "src", "Makefile")
+        write(p, read(p) + "# my change\n")
+        with self.assertRaises(fw.FwError):
+            fw.check_plain(self.k)
 
     def test_set_config_option(self):
         t = fw.set_config_option("CONFIG_A=y\nCONFIG_WANT_SEGQ=y\n", "WANT_SEGQ", False)
@@ -165,12 +190,12 @@ class FlashFixture(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def make_build(self, board, primary, stamp="20260101-1200", segq=True):
+    def make_build(self, board, primary, stamp="20260101-1200"):
         d = os.path.join(self.out, f"{board}-{stamp}")
         write(os.path.join(d, primary), "FW")
         write(os.path.join(d, "klipper.elf"), "ELF")
         write(os.path.join(d, "build-info.json"),
-              json.dumps({"board": board, "segq": segq, "klipper_tag": "v0.13.0", "primary_artifact": primary,
+              json.dumps({"board": board, "plain_klipper": True, "klipper_tag": "v0.13.0", "primary_artifact": primary,
                           "artifacts": {primary: {"bytes": 2, "sha256": fw.sha256_file(os.path.join(d, primary))}}}))
         return d
 

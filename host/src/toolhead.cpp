@@ -29,15 +29,32 @@ void StepQueue::init(int oid, bool invert_dir, uint32_t max_error_ticks, uint32_
 }
 
 void StepQueue::push_run(int dir, double first, double interval, uint32_t count) {
+    // Step times in 1/65536 tick fixed point: the ESP32-S3 has no double-precision hardware, so the
+    // per-step work below stays in integers (2026-10-24; the error is under a tick per 60,000 steps).
+    push_run_fx(dir, int64_t(std::llround(first * 65536.0)), int64_t(std::llround(interval * 65536.0)), count);
+}
+
+void StepQueue::push_run_fx(int dir, int64_t first_fx, int64_t interval_fx, uint32_t count) {
     if (!count) return;
-    runs_.push_back({first, interval, count, 0, int8_t(dir)});
+    Run r;
+    r.count = count;
+    r.done = 0;
+    r.dir = int8_t(dir);
+    r.first_fx = first_fx;
+    r.iv_fx = interval_fx;
+    runs_.push_back(r);
     pending_steps_ += count;
 }
 
 double StepQueue::last_pushed() const {
     if (runs_.empty()) return double(last_clock_);
     const Run& r = runs_.back();
-    return r.first + r.interval * (r.count - 1);
+    return double(r.first_fx + r.iv_fx * int64_t(r.count - 1)) / 65536.0;
+}
+
+const char* MotionPerf::name(int i) {
+    static const char* const N[] = {"planner", "shaping", "step times", "compression", "sending"};
+    return i >= 0 && i < MotionPerf::N ? N[i] : "?";
 }
 
 void StepQueue::reset() {
@@ -45,7 +62,7 @@ void StepQueue::reset() {
     cur_dir_ = -1;
 }
 
-int StepQueue::flush(uint64_t upto, std::vector<std::string>& out) {
+int StepQueue::flush(uint64_t upto, std::vector<std::string>& out, std::vector<uint64_t>* ends) {
     int moves = 0;
     std::vector<int64_t> win;
     const std::string O = std::to_string(oid_);
@@ -54,17 +71,18 @@ int StepQueue::flush(uint64_t upto, std::vector<std::string>& out) {
         // has no double-precision hardware, so the fit works on short windows in float)
         win.clear();
         int dir = runs_.front().dir;
+        const int64_t upto_fx = upto >= (uint64_t(1) << 46) ? INT64_MAX : int64_t(upto) << 16;
         for (size_t ri = 0; ri < runs_.size() && win.size() < 256; ri++) {
             const Run& r = runs_[ri];
             if (r.dir != dir) break;
             bool stop = false;
-            for (uint32_t j = r.done; j < r.count && win.size() < 256; j++) {
-                double c = r.first + r.interval * j;
-                if (c > double(upto)) {
+            int64_t c = r.first_fx + r.iv_fx * int64_t(r.done);
+            for (uint32_t j = r.done; j < r.count && win.size() < 256; j++, c += r.iv_fx) {
+                if (c > upto_fx) {
                     stop = true;
                     break;
                 }
-                win.push_back(int64_t(std::llround(c)));
+                win.push_back((c + 32768) >> 16);
             }
             if (stop) break;
         }
@@ -135,6 +153,7 @@ int StepQueue::flush(uint64_t upto, std::vector<std::string>& out) {
             int64_t endc = 0;
             size_t n = exact(I, int64_t(Ar), endc);
             if (n > best) best = n, best_add = int64_t(Ar), best_end = endc, best_iv = I;
+            if (best == win.size()) break;   // the whole window in one command: no candidate can beat it
         }
         int64_t I0 = best_iv;
         if (best == 0) {   // a step closer than the board can do: send it alone, as soon as allowed
@@ -145,6 +164,7 @@ int StepQueue::flush(uint64_t upto, std::vector<std::string>& out) {
                       " add=" + std::to_string(best_add));
         moves++;
         last_clock_ = uint64_t(best_end);
+        if (ends) ends->push_back(uint64_t(best_end));
         // consume `best` steps from the runs
         uint64_t left = best;
         pending_steps_ -= best;
@@ -185,6 +205,12 @@ Toolhead::Toolhead(BoardPlan& plan, ToolheadIO io) : plan_(plan), io_(std::move(
         if (si_[a] < 0 || !plan_.steppers[size_t(si_[a])].has_rail) why_not_ += std::string(why_not_.empty() ? "" : ", ") + "[" + names[a] + "]";
     if (!why_not_.empty()) why_not_ = "no " + why_not_ + " in printer.cfg";
     else if (!plan_.printer.present || plan_.printer.max_velocity <= 0) why_not_ = "no [printer] section with max_velocity / max_accel";
+    if (why_not_.empty() && plan_.printer.corexy) {
+        double a = plan_.steppers[size_t(si_[0])].steps_per_mm(), b = plan_.steppers[size_t(si_[1])].steps_per_mm();
+        if (std::fabs(a - b) > 1e-9 * a)
+            why_not_ = "corexy needs the same steps per mm on stepper_x and stepper_y (rotation_distance, microsteps)";
+        corexy_ = true;
+    }
     ok_ = why_not_.empty();
     if (!ok_) return;
     const PrinterLimits& pr = plan_.printer;
@@ -204,7 +230,12 @@ Toolhead::Toolhead(BoardPlan& plan, ToolheadIO io) : plan_(plan), io_(std::move(
     // 32 moves of look-ahead: ~6 KB. (The planner's default 256 needed ~45 KB in one piece and aborted
     // the ESP32-S3 on the first Tina 2 power-up, 2026-10-14.) Enough to plan the stop from full speed
     // even with 0.2 mm G-code segments: 97 mm/s at 1000 mm/s^2 needs 4.7 mm, 32 x 0.2 mm = 6.4 mm.
-    pcfg_.lookahead = 32;
+    pcfg_.lookahead = io_.lookahead > 32 ? io_.lookahead : 32;
+    // More look-ahead (boards with PSRAM): halve until it fits with room to spare, down to 32.
+    while (pcfg_.lookahead > 32 && io_.largest_free &&
+           io_.largest_free() < Planner::ring_bytes(pcfg_.lookahead) + 65536)
+        pcfg_.lookahead /= 2;
+    if (pcfg_.lookahead < 32) pcfg_.lookahead = 32;
     if (io_.largest_free) {
         size_t need = Planner::ring_bytes(pcfg_.lookahead) + 8192, have = io_.largest_free();
         if (have < need) {
@@ -216,21 +247,153 @@ Toolhead::Toolhead(BoardPlan& plan, ToolheadIO io) : plan_(plan), io_(std::move(
     }
     planner_.reset(new Planner(pcfg_));
     planner_->set_sinks([this](const Segment& s) { on_segment(s); });
+#if PH_FIXED
+    shaper_.set_sink([this](int64_t us0, int64_t us1, const int32_t* st) { emit_steps_us(us0, us1, st); });
+#else
+    shaper_.set_sink([this](double t0, double dur, const int32_t* st) { emit_steps(t0, dur, st); });
+#endif
+#if PH_PRO
+    shaper_.configure(plan_.shaping);
+    retract_ = plan_.retract;
+    if (plan_.mesh_default.valid()) mesh_ = plan_.mesh_default;   // Klipper loads the "default" profile at start
+#endif
 }
 
-void Toolhead::on_segment(const Segment& s) {
-    if (t_ < now_ + 0.05) t_ = now_ + 0.15;   // planned late (held for look-ahead): never schedule in the past
-    double T = double(s.n) / pcfg_.dda_hz;
-    double c0 = double(io_.clock_at(t_)), c1 = double(io_.clock_at(t_ + T));
+std::vector<std::pair<size_t, int>> Toolhead::axis_motors(int axis) const {
+    if (corexy_ && axis == 0) return {{size_t(si_[0]), 1}, {size_t(si_[1]), 1}};    // +X: A+, B+
+    if (corexy_ && axis == 1) return {{size_t(si_[0]), 1}, {size_t(si_[1]), -1}};   // +Y: A+, B-
+    return {{size_t(si_[axis]), 1}};
+}
+
+void Toolhead::emit_steps(double t0, double T, const int32_t steps_in[NUM_AXES]) {
+    PerfScope ps(this, MotionPerf::STEPS);
+    double c0 = double(io_.clock_at(t0)), c1 = double(io_.clock_at(t0 + T));
+    int32_t steps[NUM_AXES] = {steps_in[0], steps_in[1], steps_in[2], steps_in[3]};
+    if (corexy_) {   // X and Y steps -> motor A and B steps (same steps/mm, so exact integers)
+        steps[0] = steps_in[0] + steps_in[1];
+        steps[1] = steps_in[0] - steps_in[1];
+    }
     for (int a = 0; a < NUM_AXES; a++) {
-        int32_t st = s.steps[a];
+        int32_t st = steps[a];
         if (!st || si_[a] < 0) continue;
         uint32_t k = uint32_t(st < 0 ? -st : st);
         double iv = (c1 - c0) / k;
         sq_[size_t(si_[a])].push_run(st > 0 ? 1 : 0, c0 + 0.5 * iv, iv, k);
+        perf_.steps += k;
     }
+}
+
+// The same with the board clocks already known: no floating point at all (PH_FIXED). The interval in
+// 1/65536 ticks is span * 65536 / count; for spans under 65536 ticks (5.4 ms at 12 MHz, which covers
+// the 2 ms grid and the 5 ms planner segments) that is a 32-bit divide, which the ESP32-S3 does in
+// hardware (a 64-bit divide is a software routine).
+void Toolhead::emit_steps_clk(uint64_t c0, uint64_t c1, const int32_t steps_in[NUM_AXES]) {
+    PerfScope ps(this, MotionPerf::STEPS);
+    int32_t steps[NUM_AXES] = {steps_in[0], steps_in[1], steps_in[2], steps_in[3]};
+    if (corexy_) {
+        steps[0] = steps_in[0] + steps_in[1];
+        steps[1] = steps_in[0] - steps_in[1];
+    }
+    const uint64_t span = c1 > c0 ? c1 - c0 : 0;
+    for (int a = 0; a < NUM_AXES; a++) {
+        int32_t st = steps[a];
+        if (!st || si_[a] < 0) continue;
+        uint32_t k = uint32_t(st < 0 ? -st : st);
+        int64_t iv_fx = span < 65536 ? int64_t(uint32_t(span << 16) / k) : int64_t((span << 16) / k);
+        sq_[size_t(si_[a])].push_run_fx(st > 0 ? 1 : 0, int64_t(c0 << 16) + iv_fx / 2, iv_fx, k);
+        perf_.steps += k;
+    }
+}
+
+#if PH_FIXED
+// Host time -> board clock as a straight line through clock_at(t) with the slope over the next
+// second, refreshed for every planner segment (clock_at itself follows the clock sync).
+void Toolhead::map_refresh(double t) {
+    map_us_ = MotionShaperFx::to_us(t);
+    double tt = double(map_us_) * 1e-6;
+    map_clk_ = io_.clock_at(tt);
+    uint64_t c2 = io_.clock_at(tt + 1.0);
+    map_q32_ = int64_t(double(c2 - map_clk_) * 1e-6 * 4294967296.0);
+}
+
+uint64_t Toolhead::clock_us(int64_t us) const {
+    int64_t d = us - map_us_;   // within a fraction of a second: fits easily
+    return uint64_t(int64_t(map_clk_) + ((d * map_q32_ + (int64_t(1) << 31)) >> 32));
+}
+
+void Toolhead::emit_steps_us(int64_t us0, int64_t us1, const int32_t steps[NUM_AXES]) {
+    emit_steps_clk(clock_us(us0), clock_us(us1), steps);
+}
+#endif
+
+void Toolhead::on_segment_plan(const Segment& s) {
+    // Planned late (held for look-ahead, or `now` was taken before something slow): never schedule in
+    // the past. The time is read fresh here: 2026-10-27 on the Tina 2, a G1 Z3 right after a board
+    // restart was timed from a stale "now" and its steps reached the board 44 ms late ("Timer too close").
+    double f = io_.now ? std::max(now_, io_.now()) : now_;
+    if (t_ < f + 0.1) t_ = f + 0.2;
+    double T = double(s.n) / pcfg_.dda_hz;
+    perf_.segments++;
+    segs_since_send_++;
+#if PH_FIXED
+    map_refresh(t_);
+#endif
+#if PH_PRO
+    if (shaper_.active()) {
+        bool last = (s.flags & SEG_LAST) != 0;
+        {
+            PerfScope ps(this, MotionPerf::SHAPE);
+            shaper_.push(t_, T, s.steps, last);
+        }
+        t_ += T;
+        if (last) {   // the shaped motion ends `tail` later; the next one starts `lead` early
+            t_ = std::max(t_, shaper_.out_end()) + shaper_.lead() + 1e-6;
+            if (shaping_pending_) {
+                shaper_.configure(shaping_next_);
+                shaping_pending_ = false;
+            }
+        }
+        t_end_ = std::max(t_end_, shaper_.out_end());
+        return;
+    }
+#endif
+#if PH_FIXED
+    emit_steps_clk(io_.clock_at(t_), io_.clock_at(t_ + T), s.steps);
+#else
+    emit_steps(t_, T, s.steps);
+#endif
     t_ += T;
     t_end_ = t_;
+}
+
+// Every planner segment (2026-10-28): plan it, then, if nothing has been sent for 20 ms, send what is
+// due now. A burst of planning (look-ahead running dry, or many tiny moves, e.g. the benchmark's
+// "wiggle") can otherwise take longer on the ESP32-S3 than the 0.1-0.2 s its first steps were given,
+// and they reach the send already late (Tina 2, SF_BENCH, 2026-10-28: refused 0.65 and 18.8 ms late).
+void Toolhead::on_segment(const Segment& s) {
+    on_segment_plan(s);
+    send_soon();
+}
+
+std::string Toolhead::set_shaping(const ShapingConfig& c, double now) {
+#if PH_PRO
+    if (!ok_) return "moves are not set up: " + why_not_;
+    if (shaper_.idle() && !planner_->queued() && (!shaping_pending_ || idle(now))) {
+        shaper_.configure(c);
+        shaping_pending_ = false;
+        return "";
+    }
+    if (!shaping_pending_ && shaper_.config().same_except_pa(c)) {   // only the advance value: at once
+        shaper_.set_pa(c.pa);
+        return "";
+    }
+    shaping_next_ = c;   // in motion: from the next stop
+    shaping_pending_ = true;
+    return "";
+#else
+    (void)c, (void)now;
+    return "input shaping and pressure advance need the CAPTAIN or SKIPPER build";
+#endif
 }
 
 void Toolhead::ensure_time(double now) {
@@ -239,13 +402,14 @@ void Toolhead::ensure_time(double now) {
 }
 
 void Toolhead::enable_all(double now) {
-    if (enabled_) return;
+    if (enabled_ || bench_) return;   // benchmark: the drivers stay off
     for (int a = 0; a < NUM_AXES; a++)
         if (si_[a] >= 0 && io_.enable) io_.enable(size_t(si_[a]), true, now);
     enabled_ = true;
 }
 
 void Toolhead::flush_lookahead() {
+    PerfScope ps(this, MotionPerf::PLAN);
     if (planner_ && planner_->queued()) planner_->flush();
 }
 
@@ -257,7 +421,7 @@ double Toolhead::buffered(double now) const {
 
 bool Toolhead::idle(double now) const {
     if (!ok_) return true;
-    if (hstate_ != H_IDLE || planner_->queued()) return false;
+    if (hstate_ != H_IDLE || planner_->queued() || !shaper_.idle() || rs_.active) return false;
     for (auto& q : sq_)
         if (q.pending()) return false;
     return now > t_end_ + 0.05;
@@ -282,11 +446,15 @@ void Toolhead::stop(double now) {
     planner_->set_sinks([this](const Segment& s) { on_segment(s); });
     planner_->set_position(pos);   // where it was planned to be: not reliable after a stop
     for (auto& q : sq_) q.clear_pending(), q.reset();
+    shaper_.reset();
+    if (shaping_pending_) shaper_.configure(shaping_next_), shaping_pending_ = false;
+    rs_.active = false;
     for (bool& h : homed_) h = false;   // positions are no longer known
     hstate_ = H_IDLE;
     t_ = t_end_ = now;
-    inflight_.clear();
+    inflight_ = decltype(inflight_)();
     inflight_count_ = 0;
+    late_.clear();
 }
 
 void Toolhead::motors_off(double now) {
@@ -310,10 +478,22 @@ std::string Toolhead::check_limits(const double tgt[NUM_AXES]) const {
 }
 
 void Toolhead::add_planned_move(const double tgt[NUM_AXES], double feed, double now) {
-    ensure_time(now);
-    enable_all(now);
-    planner_->add_move(tgt, feed);
-    last_add_ = now;
+    {
+        PerfScope ps(this, MotionPerf::PLAN);
+        ensure_time(now);
+        enable_all(now);
+        planner_->add_move(tgt, feed);
+        last_add_ = now;
+    }
+    // the look-ahead re-planning itself can take a while with many moves queued: send what is due
+    send_soon();
+}
+
+// Send what is due if nothing has been sent for 20 ms (2026-10-28), from inside planning.
+void Toolhead::send_soon() {
+    if (!io_.now || in_send_ || !late_.empty() || hstate_ != H_IDLE || rs_.active) return;
+    double f = io_.now();
+    if (f - last_send_t_ > 0.02) send_due(f, false);
 }
 
 std::string Toolhead::move(const GLine& g, bool immediate, double now) {
@@ -335,19 +515,126 @@ std::string Toolhead::move(const GLine& g, bool immediate, double now) {
         npos[AX_E] = gpos_[AX_E] + de;
     }
     if (de != 0 && si_[AX_E] < 0) return "error: no [extruder] stepper in printer.cfg";
-    if (de != 0 && io_.extruder_temp && io_.extruder_temp() < plan_.printer.min_extrude_temp)
+    if (de != 0 && !bench_ && io_.extruder_temp && io_.extruder_temp() < plan_.printer.min_extrude_temp)
         return "error: Extrude below minimum temp (" + f3(plan_.printer.min_extrude_temp) + " C, min_extrude_temp)";
     tgt[AX_E] = planner_->position(AX_E) + de * extrude_factor_;
+    double flat_z = tgt[2];
+#if PH_PRO
+    if (mesh_.valid()) tgt[2] += mesh_.at(tgt[0], tgt[1]);
+#endif
     std::string lim = check_limits(tgt);
     if (!lim.empty()) return "error: " + lim;
     for (int a = 0; a < NUM_AXES; a++) gpos_[a] = npos[a];
     bool moves = false;
     for (int a = 0; a < NUM_AXES; a++) moves |= std::fabs(tgt[a] - planner_->position(a)) > 1e-9;
     if (!moves) return "ok";
+#if PH_PRO
+    double dxy = std::hypot(tgt[0] - planner_->position(0), tgt[1] - planner_->position(1));
+    if (mesh_.valid() && dxy > 5.0) {   // follow the mesh: 5 mm pieces
+        double from[NUM_AXES];
+        for (int a = 0; a < NUM_AXES; a++) from[a] = planner_->position(a);
+        double from_flat_z = from[2] - mesh_.at(from[0], from[1]);
+        int n = int(std::ceil(dxy / 5.0));
+        for (int k = 1; k <= n; k++) {
+            double f = double(k) / n, p[NUM_AXES];
+            for (int a = 0; a < NUM_AXES; a++) p[a] = from[a] + (tgt[a] - from[a]) * f;
+            p[2] = from_flat_z + (flat_z - from_flat_z) * f + mesh_.at(p[0], p[1]);
+            if (k == n) p[2] = tgt[2];
+            add_planned_move(p, feed_ * speed_factor_, now);
+        }
+    } else {
+        add_planned_move(tgt, feed_ * speed_factor_, now);
+    }
+#else
+    (void)flat_z;
     add_planned_move(tgt, feed_ * speed_factor_, now);
+#endif
     if (immediate) flush_lookahead();
     return "ok";
 }
+
+#if PH_PRO
+std::string Toolhead::move_to(const double xyz[3], double speed, double now) {
+    if (!ok_) return "error: moves are not set up: " + why_not_;
+    if (hstate_ != H_IDLE) return "error: busy homing / probing";
+    double tgt[NUM_AXES];
+    for (int a = 0; a < NUM_AXES; a++) tgt[a] = planner_->position(a);
+    double flat_z = tgt[2] - mesh_z(tgt[0], tgt[1]);
+    for (int a = 0; a < 3; a++)
+        if (!std::isnan(xyz[a])) tgt[a] = xyz[a];
+    if (!std::isnan(xyz[2])) flat_z = xyz[2];
+    tgt[2] = flat_z + mesh_z(tgt[0], tgt[1]);
+    std::string lim = check_limits(tgt);
+    if (!lim.empty()) return "error: " + lim;
+    for (int a = 0; a < 3; a++) gpos_[a] = (a == 2 ? flat_z : tgt[a]) - off_[a];
+    bool moves = false;
+    for (int a = 0; a < 3; a++) moves |= std::fabs(tgt[a] - planner_->position(a)) > 1e-9;
+    if (!moves) return "ok";
+    add_planned_move(tgt, speed, now);
+    flush_lookahead();
+    return "ok";
+}
+
+void Toolhead::skip_move(const GLine& g) {
+    for (int a = 0; a < 3; a++)
+        if (g.has(AXL[a])) gpos_[a] = rel_ ? gpos_[a] + g.get(AXL[a]) : double(g.get(AXL[a]));
+    if (g.has('E')) gpos_[AX_E] = (rel_ || e_rel_) ? gpos_[AX_E] + g.get('E') : double(g.get('E'));
+    if (g.has('F') && g.get('F') > 0) feed_ = g.get('F') / 60.0;
+}
+
+// G2 / G3 (Klipper gcode_arcs.py planArc, from Marlin): the XY plane, I / J centre offsets, the arc
+// in pieces of [gcode_arcs] resolution (1 mm), helical Z and E spread evenly.
+std::string Toolhead::arc(const GLine& g, bool clockwise, bool immediate, double now) {
+    if (rel_) return "error: G2/G3 does not support relative move mode";
+    if (g.has('R')) return "error: G2/G3 does not support R moves";
+    double I = g.get('I', 0), J = g.get('J', 0);
+    if (I == 0 && J == 0) return "error: G2/G3 requires IJ parameters";
+    const double cur[4] = {gpos_[0], gpos_[1], gpos_[2], gpos_[3]};
+    double tgt[3] = {g.has('X') ? double(g.get('X')) : cur[0], g.has('Y') ? double(g.get('Y')) : cur[1],
+                     g.has('Z') ? double(g.get('Z')) : cur[2]};
+    double rP = -I, rQ = -J;
+    double cP = cur[0] - rP, cQ = cur[1] - rQ;
+    double rtA = tgt[0] - cP, rtB = tgt[1] - cQ;
+    double ang = std::atan2(rP * rtB - rQ * rtA, rP * rtA + rQ * rtB);
+    if (ang < 0) ang += 2 * M_PI;
+    if (clockwise) ang -= 2 * M_PI;
+    if (ang == 0 && cur[0] == tgt[0] && cur[1] == tgt[1]) ang = 2 * M_PI;
+    double lin = tgt[2] - cur[2], radius = std::hypot(rP, rQ), flat = radius * ang;
+    double travel = lin != 0 ? std::hypot(flat, lin) : std::fabs(flat);
+    double res = plan_.arc_resolution > 0 ? plan_.arc_resolution : 1.0;
+    double segs = std::max(1.0, std::floor(travel / res));
+    if (segs > 20000) return "error: G2/G3 arc too long";
+    double dth = ang / segs, dz = lin / segs, e_per = 0, e_base = 0;
+    bool has_e = g.has('E');
+    if (has_e) {
+        if (!e_rel_) e_base = cur[3];
+        e_per = (g.get('E') - e_base) / segs;
+    }
+    int n = int(segs);
+    for (int i = 1; i <= n; i++) {
+        double c = i * dth, ct = std::cos(c), st = std::sin(c);
+        double p[3] = {cP + (-I * ct + J * st), cQ + (-I * st - J * ct), cur[2] + i * dz};
+        if (i == n) p[0] = tgt[0], p[1] = tgt[1], p[2] = tgt[2];
+        char b[160];
+        int k = snprintf(b, sizeof b, "G1 X%.6f Y%.6f Z%.6f", p[0], p[1], p[2]);
+        if (has_e && e_per != 0) {
+            k += snprintf(b + k, sizeof b - size_t(k), " E%.6f", e_base + e_per);
+            if (!e_rel_) e_base += e_per;
+        }
+        if (g.has('F')) snprintf(b + k, sizeof b - size_t(k), " F%.3f", double(g.get('F')));
+        GLine s;
+        gcode_parse(b, s);
+        std::string r = move(s, false, now);
+        if (r.rfind("ok", 0) != 0) return r;
+    }
+    if (immediate) flush_lookahead();
+    return "ok";
+}
+
+#else
+std::string Toolhead::move_to(const double*, double, double) { return "error: CAPTAIN+"; }
+void Toolhead::skip_move(const GLine&) {}
+#endif
 
 std::string Toolhead::jog(int axis, double dist, double speed, double now) {
     if (!ok_) return "error: moves are not set up: " + why_not_;
@@ -358,10 +645,11 @@ std::string Toolhead::jog(int axis, double dist, double speed, double now) {
     for (int a = 0; a < NUM_AXES; a++) tgt[a] = planner_->position(a);
     if (axis == AX_E) {
         if (si_[AX_E] < 0) return "error: no [extruder] stepper in printer.cfg";
-        if (io_.extruder_temp && io_.extruder_temp() < plan_.printer.min_extrude_temp)
+        if (!bench_ && io_.extruder_temp && io_.extruder_temp() < plan_.printer.min_extrude_temp)
             return "error: Extrude below minimum temp (" + f3(plan_.printer.min_extrude_temp) + " C, min_extrude_temp)";
     }
     tgt[axis] += dist;
+    if (axis < 2 && mesh_.valid()) tgt[2] += mesh_z(tgt[0], tgt[1]) - mesh_z(planner_->position(0), planner_->position(1));
     std::string lim = check_limits(tgt);
     if (!lim.empty()) return "error: " + lim;
     gpos_[axis] += dist;
@@ -383,7 +671,8 @@ int64_t Toolhead::mcu_position(size_t i, bool* okp) {
 std::string Toolhead::gcode(const std::string& name, const GLine* g, const std::map<std::string, std::string>& p,
                             bool immediate, double now) {
     static const char* MOTION[] = {"G0", "G1", "G4", "G28", "G90", "G91", "G92", "M82", "M83", "M114", "M204", "M220",
-                                   "M221", "M400", "PROBE", "SET_KINEMATIC_POSITION", "QUERY_ENDSTOPS", "GET_POSITION"};
+                                   "M221", "M400", "PROBE", "SET_KINEMATIC_POSITION", "QUERY_ENDSTOPS", "GET_POSITION",
+                                   "G2", "G3", "G10", "G11", "G17", "G18", "G19", "SET_RETRACTION", "GET_RETRACTION"};
     bool is_motion = false;
     for (auto* m : MOTION) is_motion |= name == m;
     if (!is_motion) return "";
@@ -398,6 +687,44 @@ std::string Toolhead::gcode(const std::string& name, const GLine* g, const std::
     if (name == "M400") return "ok";
     if (hstate_ != H_IDLE && name != "QUERY_ENDSTOPS") return "error: busy homing / probing";
     if ((name == "G0" || name == "G1") && g) return move(*g, immediate, now);
+#if PH_PRO
+    if ((name == "G2" || name == "G3") && g) return arc(*g, name == "G2", immediate, now);
+    if (name == "G17") return "ok";
+    if (name == "G18" || name == "G19") return "error: only the XY plane (G17) is supported for arcs";
+    if (name == "SET_RETRACTION") {
+        auto get = [&](const char* k, double& v) {
+            auto it = p.find(k);
+            if (it != p.end()) v = std::max(0.0, atof(it->second.c_str()));
+        };
+        get("RETRACT_LENGTH", retract_.length);
+        get("RETRACT_SPEED", retract_.speed);
+        get("UNRETRACT_EXTRA_LENGTH", retract_.unretract_extra);
+        get("UNRETRACT_SPEED", retract_.unretract_speed);
+        if (retract_.speed <= 0) retract_.speed = 20;
+        if (retract_.unretract_speed <= 0) retract_.unretract_speed = 10;
+    }
+    if (name == "SET_RETRACTION" || name == "GET_RETRACTION")
+        return "ok RETRACT_LENGTH=" + f3(retract_.length) + " RETRACT_SPEED=" + f3(retract_.speed) +
+               " UNRETRACT_EXTRA_LENGTH=" + f3(retract_.unretract_extra) + " UNRETRACT_SPEED=" + f3(retract_.unretract_speed);
+    if (name == "G10" || name == "G11") {   // firmware_retraction.py: E only, the G-code E position unchanged
+        bool g10 = name == "G10";
+        if (retract_.length <= 0 || retracted_ == g10) return "ok";
+        if (si_[AX_E] < 0) return "error: no [extruder] stepper in printer.cfg";
+        if (!bench_ && io_.extruder_temp && io_.extruder_temp() < plan_.printer.min_extrude_temp)
+            return "error: Extrude below minimum temp (" + f3(plan_.printer.min_extrude_temp) + " C, min_extrude_temp)";
+        double t[NUM_AXES];
+        for (int a = 0; a < NUM_AXES; a++) t[a] = planner_->position(a);
+        t[AX_E] += g10 ? -retract_.length : retract_.length + retract_.unretract_extra;
+        add_planned_move(t, g10 ? retract_.speed : retract_.unretract_speed, now);
+        retracted_ = g10;
+        if (immediate) flush_lookahead();
+        return "ok";
+    }
+#else
+    if (name == "G2" || name == "G3" || name == "G10" || name == "G11" || name == "SET_RETRACTION" || name == "GET_RETRACTION")
+        return "error: " + name + " needs the CAPTAIN or SKIPPER build";
+    if (name == "G17" || name == "G18" || name == "G19") return "ok";
+#endif
     if (name == "G4" && g) {
         double sec = (g->has('P') ? g->get('P') / 1000.0 : 0.0) + (g->has('S') ? double(g->get('S')) : 0.0);
         if (sec < 0 || sec > 3600) return "error: G4 dwell must be 0 to 3600 s";
@@ -410,6 +737,7 @@ std::string Toolhead::gcode(const std::string& name, const GLine* g, const std::
             if (g->has(AXL[a])) {
                 gpos_[a] = g->get(AXL[a]);
                 off_[a] = planner_->position(a) - gpos_[a];
+                if (a == 2) off_[a] -= mesh_z(planner_->position(0), planner_->position(1));
             }
         if (g->has('E')) gpos_[AX_E] = g->get('E');
         return "ok";
@@ -491,6 +819,8 @@ std::string Toolhead::start_home(const std::vector<int>& axes, bool probe, doubl
     }
     if (probe && !homed_[2]) return "error: home Z before probing (G28 Z)";
     hj_ = HomeJob();
+    last_error_.clear();   // a new homing: an old failure must not count against it
+    for (int a : axes) last_moved_[a] = NAN;
     hj_.axes = axes;
     hj_.probe = probe;
     hj_.started = now;
@@ -566,6 +896,7 @@ bool Toolhead::home_begin_axis(double now) {
     enable_all(now);
     bool ok = true;
     hj_.pos_before = mcu_position(i, &ok);
+    if (ok && corexy_ && !hj_.probe && a < 2) hj_.pos_before_b = mcu_position(size_t(si_[1 - a]), &ok);
     if (!ok) {
         home_fail("the board did not report the stepper position", now);
         return false;
@@ -575,24 +906,54 @@ bool Toolhead::home_begin_axis(double now) {
     double ta = speed / accel, da = speed * speed / (2 * accel);
     double move_t = dist <= da ? std::sqrt(2 * dist / accel) : ta + (dist - da) / speed;
     double f = double(io_.clock_at(now + 1.0)) - double(io_.clock_at(now));
-    std::string T = std::to_string(s.trsync_oid), S = std::to_string(s.oid), E = std::to_string(es.oid);
+    // Klipper (homing.py _calc_endstop_rate): check the endstop once per step time, not faster
+    // (was a fixed 100 us: up to six times the board load Klipper itself puts on it while homing)
+    double rest = 1.0 / std::max(1.0, speed * s.steps_per_mm());
+    // CoreXY: X and Y homing moves turn both motors; both stop on the axis' endstop (Klipper adds
+    // every stepper that moves the axis to its endstop).
+    auto motors = hj_.probe ? std::vector<std::pair<size_t, int>>{{i, 1}} : axis_motors(a);
+    std::string T = std::to_string(s.trsync_oid), E = std::to_string(es.oid);
     std::vector<std::string> cmds = {
         "trsync_start oid=" + T + " report_clock=" + std::to_string(uint32_t(io_.clock_at(t0))) +
-            " report_ticks=" + std::to_string(uint32_t(0.05 * f)) + " expire_reason=3",
-        "stepper_stop_on_trigger oid=" + S + " trsync_oid=" + T,
-        "trsync_set_timeout oid=" + T + " clock=" + std::to_string(uint32_t(io_.clock_at(t0 + move_t + 0.2))),
-        "endstop_home oid=" + E + " clock=" + std::to_string(uint32_t(io_.clock_at(t0))) +
-            " sample_ticks=" + std::to_string(uint32_t(0.000015 * f)) + " sample_count=4 rest_ticks=" +
-            std::to_string(uint32_t(0.0001 * f)) + " pin_value=" + (es.invert ? "0" : "1") + " trsync_oid=" + T +
-            " trigger_reason=1"};
-    sq_[i].reset();
-    schedule_homing_move(i, dir, dist, speed, accel, t0);
-    sq_[i].flush(UINT64_MAX, cmds);
+        " report_ticks=" + std::to_string(uint32_t(0.05 * f)) + " expire_reason=3"};
+    for (auto& mo : motors) cmds.push_back("stepper_stop_on_trigger oid=" + std::to_string(plan_.steppers[mo.first].oid) + " trsync_oid=" + T);
+    cmds.push_back("trsync_set_timeout oid=" + T + " clock=" + std::to_string(uint32_t(io_.clock_at(t0 + move_t + 0.2))));
+    cmds.push_back("endstop_home oid=" + E + " clock=" + std::to_string(uint32_t(io_.clock_at(t0))) +
+                   " sample_ticks=" + std::to_string(uint32_t(0.000015 * f)) + " sample_count=4 rest_ticks=" +
+                   std::to_string(uint32_t(rest * f)) + " pin_value=" + (es.invert ? "0" : "1") + " trsync_oid=" + T +
+                   " trigger_reason=1");
+    for (auto& mo : motors) {
+        sq_[mo.first].reset();
+        schedule_homing_move(mo.first, mo.second > 0 ? dir : 1 - dir, dist, speed, accel, t0);
+    }
+    // Only the first SEND_AHEAD seconds of steps now; tick() streams the rest like any move.
+    // (2026-10-20 Tina 2: compressing all 49,200 steps of the Z homing move up front took about
+    // 0.4 s on the ESP32-S3, so endstop_home reached the board 130 ms after its own start time:
+    // "Timer too close".)
+    int first_moves = 0;
+    for (auto& mo : motors) first_moves += sq_[mo.first].flush(io_.clock_at(t0 + SEND_AHEAD), cmds);
+    if (io_.now && io_.now() > t0 - 0.05) {   // still too slow: do not send anything late, start again
+        for (auto& mo : motors) sq_[mo.first].clear_pending(), sq_[mo.first].reset();
+        tmc_sensorless(e, false);
+        if (++hj_.late_tries >= 3) {
+            home_fail("the ESP32 could not prepare the homing move in time (3 tries)", now);
+            return false;
+        }
+        if (io_.log) io_.log("homing: move prepared too late, trying again");
+        hstate_ = H_WAIT_IDLE;
+        return false;
+    }
     std::string err;
     if (!io_.send(cmds, &err)) {
         tmc_sensorless(e, false);
         home_fail("could not send the homing move: " + err, now);
         return false;
+    }
+    if (first_moves) {
+        uint64_t lc = 0;
+        for (auto& mo : motors) lc = std::max(lc, sq_[mo.first].last_clock());
+        inflight_.push({lc, first_moves});
+        inflight_count_ += first_moves;
     }
     hj_.t_end = t0 + move_t;
     hj_.triggered = hj_.finished = false;
@@ -601,6 +962,117 @@ bool Toolhead::home_begin_axis(double now) {
     home_msg_ = std::string(hj_.probe ? "probing Z" : "homing ") + (hj_.probe ? "" : std::string(1, AXL[a])) +
                 (hj_.pass ? " (second, slower approach)" : "");
     return true;
+}
+
+#if PH_PRO
+// ---- the resonance test motion
+
+std::string Toolhead::start_resonance(int axis, const ResonanceMotion& m, double now) {
+    if (!ok_) return "moves are not set up: " + why_not_;
+    if (axis < 0 || axis > 1) return "the resonance test runs along X or Y";
+    if (!homed_[axis]) return std::string("home ") + AXL[axis] + " first";
+    if (rs_.active || hstate_ != H_IDLE || !idle(now)) return "wait until nothing moves";
+    const StepperObj& s = plan_.steppers[size_t(si_[axis])];
+    double pos = planner_->position(axis);
+    if (pos + m.min_x < s.position_min - 1e-6 || pos + m.max_x > s.position_max + 1e-6)
+        return "the test swings from " + f3(m.min_x) + " to +" + f3(m.max_x) + " mm around the head; at " + f3(pos) +
+               " that leaves " + AXL[axis] + " limits " + f3(s.position_min) + ".." + f3(s.position_max) +
+               ". Move the head towards the middle.";
+    rs_ = ResRun();
+    rs_.active = true;
+    rs_.axis = axis;
+    rs_.m = m;
+    rs_.spm = s.steps_per_mm();
+    if (io_.now) now = std::max(now, io_.now());
+    rs_.t0 = now + START_DELAY;
+    enable_all(now);
+    t_end_ = std::max(t_end_, rs_.t0 + m.end_t);
+    return "";
+}
+
+// Exact step times: a step up when the position passes the next half step, down likewise; each
+// piece is a parabola, split where the speed passes zero.
+void Toolhead::resonance_generate(double upto) {
+    if (upto > rs_.m.end_t) upto = rs_.m.end_t;
+    auto mot = axis_motors(rs_.axis);   // CoreXY: both motors, one step each per axis step
+    const double f = double(io_.clock_at(rs_.t0 + 1.0)) - double(io_.clock_at(rs_.t0)), c0 = double(io_.clock_at(rs_.t0));
+    const auto& P = rs_.m.pieces;
+    while (rs_.gen < upto && rs_.piece < P.size()) {
+        const ResonanceMotion::Piece& p = P[rs_.piece];
+        double pend = rs_.piece + 1 < P.size() ? P[rs_.piece + 1].t0 : rs_.m.end_t;
+        double u0 = rs_.gen - p.t0, u1 = std::min(upto, pend) - p.t0;
+        // split at the turning point
+        double tz = p.a != 0 ? -p.v0 / p.a : -1;
+        double cuts[3] = {u0, (tz > u0 && tz < u1) ? tz : u1, u1};
+        for (int part = 0; part < 2; part++) {
+            double a0 = cuts[part], a1 = cuts[part + 1];
+            if (a1 <= a0) continue;
+            double vm = p.v0 + p.a * 0.5 * (a0 + a1);
+            if (vm == 0) continue;
+            int dir = vm > 0 ? 1 : -1;
+            double xe = (p.x0 + p.v0 * a1 + 0.5 * p.a * a1 * a1) * rs_.spm;   // in steps
+            for (int guard = 0; guard < 1000000; guard++) {
+                double target = double(rs_.s) + 0.5 * dir;
+                if ((dir > 0 && xe < target) || (dir < 0 && xe > target)) break;
+                // 0.5 a u^2 + v0 u + (x0 - target / spm) = 0, the root in [a0, a1]
+                double A = 0.5 * p.a * rs_.spm, B = p.v0 * rs_.spm, C = p.x0 * rs_.spm - target, u;
+                if (std::fabs(A) < 1e-12) {
+                    u = -C / B;
+                } else {
+                    double disc = std::max(0.0, B * B - 4 * A * C), sq = std::sqrt(disc);
+                    double qq = -0.5 * (B + (B >= 0 ? sq : -sq));
+                    double r1 = qq / A, r2 = qq != 0 ? C / qq : r1;
+                    if (r1 > r2) std::swap(r1, r2);
+                    u = (r1 >= a0 - 1e-9 && r1 <= a1 + 1e-9) ? r1 : r2;
+                }
+                u = std::min(std::max(u, a0), a1);
+                for (auto& mo : mot) sq_[mo.first].push_run(dir * mo.second > 0 ? 1 : 0, c0 + (p.t0 + u) * f, 1, 1);
+                rs_.s += dir;
+            }
+        }
+        rs_.gen = std::min(upto, pend);
+        if (rs_.gen >= pend) rs_.piece++;
+    }
+}
+
+void Toolhead::resonance_finish(double now) {
+    rs_.active = false;
+    double pos[NUM_AXES];
+    for (int k = 0; k < NUM_AXES; k++) pos[k] = planner_->position(k);
+    pos[rs_.axis] += double(rs_.s) / rs_.spm;   // where the steps left it (exact)
+    planner_->set_position(pos);
+    gpos_[rs_.axis] = pos[rs_.axis] - off_[rs_.axis];
+    t_end_ = std::max(t_end_, now);
+}
+
+void Toolhead::abort_resonance(double now) {
+    if (!rs_.active) return;
+    for (auto& mo : axis_motors(rs_.axis)) sq_[mo.first].clear_pending(), sq_[mo.first].reset();
+    rs_.active = false;
+    homed_[rs_.axis] = false;   // the board may still run what was sent: the position is not known
+    t_end_ = now + SEND_AHEAD;
+}
+
+#else
+std::string Toolhead::start_resonance(int, const ResonanceMotion&, double) { return "needs the CAPTAIN or SKIPPER build"; }
+void Toolhead::resonance_generate(double) {}
+void Toolhead::resonance_finish(double) {}
+void Toolhead::abort_resonance(double) {}
+#endif
+
+void Toolhead::abort_homing(double now) {
+    if (hstate_ == H_IDLE) return;
+    int a = hj_.axes.empty() ? -1 : hj_.axes[hj_.idx < hj_.axes.size() ? hj_.idx : 0];
+    if (hstate_ == H_MOVING && a >= 0) {   // the move is out: the board stops it, home_finish_axis follows
+        const StepperObj& s = plan_.steppers[size_t(si_[a])];
+        io_.send({"trsync_trigger oid=" + std::to_string(s.trsync_oid) + " reason=2"}, nullptr);
+        hj_.reason = 2;
+        hj_.finished = true;
+        return;
+    }
+    // not sent yet (waiting for idle, or between late-guard retries): send nothing at all
+    if (a >= 0) homed_[a] = false;
+    home_fail("aborted", now);
 }
 
 void Toolhead::home_fail(const std::string& why, double now) {
@@ -621,12 +1093,21 @@ void Toolhead::home_finish_axis(double now) {
                   " clock=0 sample_ticks=0 sample_count=0 rest_ticks=0 pin_value=0 trsync_oid=0 trigger_reason=0",
               "trsync_trigger oid=" + std::to_string(s.trsync_oid) + " reason=2"},
              nullptr);
-    sq_[i].clear_pending();
-    sq_[i].reset();
+    bool cxy = corexy_ && !hj_.probe && a < 2;
+    for (auto& mo : (hj_.probe ? std::vector<std::pair<size_t, int>>{{i, 1}} : axis_motors(a)))
+        sq_[mo.first].clear_pending(), sq_[mo.first].reset();
     tmc_sensorless(e, false);
     bool ok = true;
     int64_t after = mcu_position(i, &ok);
     double moved = double(after - hj_.pos_before) / s.steps_per_mm() * (s.invert_dir ? -1.0 : 1.0);
+    if (cxy && ok) {   // the axis moved by half the sum (X) or half the difference (Y) of the two motors
+        const StepperObj& o = plan_.steppers[size_t(si_[1 - a])];
+        int64_t after_o = mcu_position(size_t(si_[1 - a]), &ok);
+        double mo = double(after_o - hj_.pos_before_b) / o.steps_per_mm() * (o.invert_dir ? -1.0 : 1.0);
+        double mA = a == 0 ? moved : mo, mB = a == 0 ? mo : moved;
+        moved = a == 0 ? 0.5 * (mA + mB) : 0.5 * (mA - mB);
+    }
+    if (ok) last_moved_[a] = std::fabs(moved);
     t_end_ = now;
     if (hj_.reason != 1) {
         home_fail(hj_.probe ? "the probe did not trigger before position_min"
@@ -731,34 +1212,111 @@ void Toolhead::on_message(const Message& m, double now) {
 
 void Toolhead::tick(double now) {
     if (!ok_) return;
+    if (io_.now) now = std::max(now, io_.now());   // the caller's time may be old (slow work before)
     now_ = now;
     home_step(now);
     // nothing new for a moment, or about to run dry: plan out what is queued
     if (planner_->queued() && (now - last_add_ > 0.3 || t_ - now < 0.3)) flush_lookahead();
+    if (!late_.empty()) {   // a send in the middle of that found a step too late: stop now
+        std::string why = late_;
+        late_.clear();
+        double fresh = io_.now ? std::max(now, io_.now()) : now;
+        if (io_.log) io_.log("moves: " + why);
+        if (io_.report) io_.report("moves: " + why);
+        last_error_ = why;
+        stop(fresh);
+        home_msg_ = "FAILED: " + why;
+        return;
+    }
+    if (rs_.active) {   // only as far ahead as gets sent now: the step queue stays small
+        resonance_generate(now + SEND_AHEAD - rs_.t0);
+        if (rs_.gen >= rs_.m.end_t && now > rs_.t0 + rs_.m.end_t + 0.05) resonance_finish(now);
+    }
+    send_due(now, true);
+}
+
+bool Toolhead::send_due(double now, bool may_stop) {
+    if (in_send_) return true;
+    double fresh = io_.now ? std::max(now, io_.now()) : now;
     // make room in the board's move queue
-    uint64_t nowc = io_.clock_at(now);
-    while (!inflight_.empty() && inflight_.front().first <= nowc) {
-        inflight_count_ -= inflight_.front().second;
-        inflight_.pop_front();
+    uint64_t nowc = io_.clock_at(fresh);
+    while (!inflight_.empty() && inflight_.top().first <= nowc) {
+        inflight_count_ -= inflight_.top().second;
+        inflight_.pop();
     }
     int limit = plan_.move_count > 100 ? plan_.move_count - 60 : 200;
-    if (inflight_count_ >= limit) return;
-    uint64_t upto = io_.clock_at(now + SEND_AHEAD);
+    if (inflight_count_ >= limit) {
+        perf_.queue_full++;
+        return true;
+    }
+    uint64_t upto = io_.clock_at(fresh + SEND_AHEAD);
+    // Last check before sending: a step whose time has (nearly) gone by would shut the board down with
+    // "Timer too close" (2026-10-27, Tina 2). Refuse the move instead: nothing is sent, everything
+    // stops, and the axes count as not homed (the position is no longer known).
+    {
+        uint64_t guard = io_.clock_at(fresh + 0.005) - nowc;
+        for (auto& q : sq_) {
+            uint64_t nc = q.pending() ? q.next_clock() : 0;
+            if (!nc || int64_t(nc - nowc) >= int64_t(guard)) continue;
+            double ms = double(int64_t(nowc - nc)) / double(std::max<uint64_t>(1, guard)) * 5.0;
+            // what led to it (2026-10-28): how long nothing was sent, the planning since, the board's queue
+            char why[400];
+            snprintf(why, sizeof why,
+                     "a move was due in %.3f ms and was not sent (the board would have stopped with Timer too "
+                     "close); home again. Nothing sent for %.0f ms (%llu planner segments since; %s), last send "
+                     "%.0f ms for %u commands, board move queue %d of %d, longest gap between sends so far %.0f ms",
+                     -ms, (fresh - last_send_t_) * 1e3, (unsigned long long)segs_since_send_,
+                     may_stop ? "between loop passes" : "inside one planning burst", last_send_s_ * 1e3,
+                     unsigned(last_send_cmds_), inflight_count_, limit, perf_.max_send_gap * 1e3);
+            if (!may_stop) {
+                late_ = why;
+                return false;
+            }
+            last_error_ = why;
+            if (io_.log) io_.log("moves: " + last_error_);
+            if (io_.report) io_.report("moves: " + last_error_);
+            stop(fresh);
+            home_msg_ = "FAILED: " + last_error_;
+            return false;
+        }
+    }
     std::vector<std::string> cmds;
+    std::vector<uint64_t> ends;   // each queue_step's last step: it leaves the board's queue then
     int moves = 0;
-    uint64_t last = 0;
-    for (auto& q : sq_) {
-        if (!q.pending()) continue;
-        moves += q.flush(upto, cmds);
-        last = std::max(last, q.last_clock());
+    {
+        PerfScope ps(this, MotionPerf::COMPRESS);
+        for (auto& q : sq_) {
+            if (!q.pending()) continue;
+            moves += q.flush(upto, cmds, &ends);
+        }
     }
-    if (cmds.empty()) return;
+    if (cmds.empty()) return true;
+    perf_.queue_steps += uint64_t(moves);
+    perf_.commands += cmds.size();
+    for (auto& c : cmds) perf_.command_chars += c.size();
     std::string err;
-    if (!io_.send(cmds, &err) && io_.log) io_.log("moves: " + err);
-    if (moves) {
-        inflight_.push_back({last, moves});
-        inflight_count_ += moves;
+    bool sent;
+    in_send_ = true;
+    double t_before = io_.now ? io_.now() : fresh;
+    {
+        PerfScope ps(this, MotionPerf::SEND);
+        sent = io_.send(cmds, &err);
     }
+    double t_after = io_.now ? io_.now() : t_before;
+    in_send_ = false;
+    if (last_send_t_ > 0 && fresh - last_send_t_ > perf_.max_send_gap) perf_.max_send_gap = fresh - last_send_t_;
+    last_send_t_ = t_after;
+    last_send_s_ = t_after - t_before;
+    last_send_cmds_ = cmds.size();
+    perf_.max_send_s = std::max(perf_.max_send_s, last_send_s_);
+    perf_.sends++;
+    if (!may_stop) perf_.burst_sends++;
+    segs_since_send_ = 0;
+    if (!sent && io_.log) io_.log("moves: " + err);
+    for (uint64_t e : ends) inflight_.push({e, 1});
+    inflight_count_ += moves;
+    perf_.max_inflight = std::max(perf_.max_inflight, inflight_count_);
+    return true;
 }
 
 std::string Toolhead::status_json(double now) const {
@@ -766,15 +1324,19 @@ std::string Toolhead::status_json(double now) const {
     std::string h;
     for (int a = 0; a < 3; a++)
         if (homed_[a]) h += char(tolower(AXL[a]));
-    char b[400];
+    char b[600];
+    const ShapingConfig& sc = shaping();
     snprintf(b, sizeof b,
              "{\"ok\":true,\"pos\":[%.3f,%.3f,%.3f,%.3f],\"homed\":\"%s\",\"busy\":%s,\"homing\":%s,\"msg\":\"%s\","
-             "\"min\":[%.1f,%.1f,%.1f],\"max\":[%.1f,%.1f,%.1f]}",
+             "\"min\":[%.1f,%.1f,%.1f],\"max\":[%.1f,%.1f,%.1f],\"lookahead\":%d,\"shaper_x\":\"%s\",\"shaper_y\":\"%s\","
+             "\"pa\":%.4f,\"pa_smooth\":%.3f}",
              gpos_[0], gpos_[1], gpos_[2], gpos_[3], h.c_str(), idle(now) ? "false" : "true",
              hstate_ != H_IDLE ? "true" : "false", home_msg_.c_str(),
              plan_.steppers[size_t(si_[0])].position_min, plan_.steppers[size_t(si_[1])].position_min,
              plan_.steppers[size_t(si_[2])].position_min, plan_.steppers[size_t(si_[0])].position_max,
-             plan_.steppers[size_t(si_[1])].position_max, plan_.steppers[size_t(si_[2])].position_max);
+             plan_.steppers[size_t(si_[1])].position_max, plan_.steppers[size_t(si_[2])].position_max,
+             pcfg_.lookahead, sc.x.n ? (sc.x_type + " " + f3(sc.x_freq)).c_str() : "",
+             sc.y.n ? (sc.y_type + " " + f3(sc.y_freq)).c_str() : "", sc.pa, sc.pa_smooth);
     return b;
 }
 

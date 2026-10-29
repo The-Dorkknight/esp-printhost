@@ -38,12 +38,12 @@ G-code (SD card / web upload)
         |
 [ESP32-S3 host]   WiFi, web UI, config, planner        <- NOT BUILT YET
         |  serial / USB, Klipper-style framing
-[Printer board]   Klipper MCU firmware fork + segment queue   <- NOT BUILT YET
+[Printer board]   plain Klipper v0.13.0 MCU firmware (unmodified)
         |
 steppers, heaters, fans, endstops
 ```
 
-The part in this repo is the **protocol and config library** (`host/`) plus PC tools. Details: [docs/DESIGN.md](docs/DESIGN.md). Wire format and the draft segment-queue commands: [docs/PROTOCOL.md](docs/PROTOCOL.md).
+The part in this repo is the **protocol and config library** (`host/`) plus PC tools. Details: [docs/DESIGN.md](docs/DESIGN.md). Wire format: [docs/PROTOCOL.md](docs/PROTOCOL.md) (Klipper's own).
 
 ## Message framing
 

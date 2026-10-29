@@ -1,0 +1,28 @@
+# SKIPPER Edition PRO MAX Turbo Ultra Mega Elite Performance Gamer MAXX (RGB): ESP32-S3 with 8 MB
+# flash or more and 8 MB octal PSRAM (ESP32-S3R8 / WROOM-1 N8R8, N16R8). Layered on top of
+# ../sdkconfig.defaults.
+CONFIG_SKIPPER_TIER="skipper"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="tiers/partitions_skipper.csv"
+# Octal PSRAM (uses GPIO33-37 inside the module; the Settings page already refuses 26-37)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SKIPPER_OTA=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_SKIPPER_LOOKAHEAD=512
+CONFIG_SKIPPER_LOG_RING_KB=256
+CONFIG_SKIPPER_RGB_SALUTE=y
+# Input shaping, pressure advance, resonance calibration, bed mesh, screw tilt, arcs... (2026-10-24)
+CONFIG_SKIPPER_PRO=y
+# printer.cfg up to 16 KB (2026-10-27; DECKHAND: 8 KB)
+CONFIG_SKIPPER_CFG_KB=16
+# 2026-10-27: bigger caches (they come out of internal RAM, which the PSRAM builds can spare): fewer
+# stalls fetching code and data from flash / PSRAM, the main reason the real chip is 2.5-3x slower
+# than QEMU's instruction count.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+# Error names in messages ("ESP_ERR_TIMEOUT" rather than 0x107); DECKHAND leaves them out for space
+CONFIG_ESP_ERR_TO_NAME_LOOKUP=y

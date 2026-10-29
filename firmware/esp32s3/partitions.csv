@@ -3,4 +3,6 @@ nvs,      data, nvs,     0x9000,  0x6000
 phy_init, data, phy,     0xf000,  0x1000
 factory,  app,  factory, 0x10000, 0x160000
 # the uploaded G-code file (compressed by the browser), see main/storage.c
-gcode,    data, 0x40,    0x170000, 0x90000
+gcode,    data, 0x40,    0x170000, 0x80000
+# the last crash's core dump (main/crash.c), read back after the restart
+coredump, data, coredump,0x1f0000, 0x10000

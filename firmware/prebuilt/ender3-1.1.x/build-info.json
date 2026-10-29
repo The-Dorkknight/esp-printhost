@@ -2,34 +2,31 @@
   "board": "ender3-1.1.x",
   "title": "Creality Ender-3 1.1.x Melzi (ATmega1284P)",
   "preset": "ender3-1.1.x.config",
-  "segq": true,
+  "plain_klipper": true,
   "status": "compile-only",
   "klipper_tag": "v0.13.0",
   "klipper_commit": "61c0c8d2ef40340781835dd53fb04cc7a454e37a",
   "tool_version": "0.1.0-wip",
-  "built": "2026-10-05T14:56:51",
+  "built": "2026-10-25T09:26:13",
   "primary_artifact": "klipper.elf.hex",
   "size": {
-    "text": 38664,
+    "text": 35434,
     "data": 48,
     "bss": 369,
-    "flash_bytes": 38712,
+    "flash_bytes": 35482,
     "ram_bytes": 417
   },
   "artifacts": {
     "klipper.elf.hex": {
-      "bytes": 108897,
-      "sha256": "115d94e1c288cb9ea0fd9fff4fe0f5e85a27ca211d1d5701186374d57b7ee48d"
+      "bytes": 99811,
+      "sha256": "1e8598797f5bcf8d9d9921bab1cad5160591727c7b85fbf492835a1df543285e"
     },
     "klipper.dict": {
-      "bytes": 9008,
-      "sha256": "54febc7de0d27dfa0592225c24dd452c0a7735e572f29466340624c34e549300"
+      "bytes": 8326,
+      "sha256": "e0740303bbe1dd07b0c2822169b7a9540e9e692eaaf292fb15108eb9989da01c"
     }
   },
   "source_sha256": {
-    "segq.c": "d931934ee20d80f2e2848486ade3d888bb2f0049d74b53d7e202988c5a22d7e6",
-    "segq_core.c": "11eaeb53fe423c678bfbfdeddda801b2c21ed40738a31bec56d681ed7f2981dc",
-    "segq_core.h": "0f5435ae32670ca73b8bffd1668bf26ed4694fe50b14b2850c682805e75b829b",
     "ender3-1.1.x.config": "3be165228fe2200ad7b49c38deb6a6a65dcd437a68cd05317fa1e8c8aec5f610"
   },
   "note": "compile-only: this firmware has NOT been verified on hardware",

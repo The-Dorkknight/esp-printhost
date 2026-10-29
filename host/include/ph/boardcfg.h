@@ -24,8 +24,12 @@
 // Also: SET_LED, with Klipper's parameter names. The runtime (heater control, tests, G-code) is
 // ph::Machine (machine.h).
 #pragma once
+#include <cmath>
 #include "ph/kboard.h"
 #include "ph/msgproto.h"
+#include "ph/bedmesh.h"
+#include "ph/resonance.h"
+#include "ph/shaping.h"
 #include "ph/thermistor.h"
 #include <map>
 #include <set>
@@ -50,6 +54,9 @@ struct TempSensorObj {
     std::string type;     // sensor_type
     Thermistor th;
     int heater = -1;      // index into BoardPlan::heaters if this is a heater's sensor
+    // sensor_pin: esp32:gpioN (2026-10-27): read by the ESP32-S3 itself (a chamber thermistor on a spare
+    // ESP32 pin), not by the printer board: no config_analog_in, no board range check, never a shutdown.
+    int host_gpio = -1;
     // ADC range check done by the board itself (query_analog_in min_value/max_value): outside it
     // for range_check_count reports in a row, the board shuts down ("ADC out of range"). Set from
     // min_temp/max_temp for heater sensors, like Klipper; 0..65535 (no check) for plain sensors.
@@ -105,6 +112,7 @@ struct TmcObj {
     double run_current = 0, hold_current = 0;
     int irun = 0, ihold = 0;
     bool vsense = false, stealthchop = false;
+    double rsense = 0.110;       // sense resistor, ohms
     // Register writes in the order Klipper's TMC2209 code sends them (name, address, value)
     struct Reg { std::string name; int addr; uint32_t value; };
     std::vector<Reg> init_regs;
@@ -146,6 +154,7 @@ struct StepperObj {
 
 struct PrinterLimits {           // [printer]
     bool present = false;
+    bool corexy = false;         // kinematics: corexy (2026-10-27): stepper_x = motor A, stepper_y = motor B
     double max_velocity = 0, max_accel = 0, max_z_velocity = 0, max_z_accel = 0;
     double square_corner_velocity = 5;
     double min_extrude_temp = 170, max_extrude_only_velocity = 0;   // from [extruder]
@@ -155,6 +164,12 @@ struct ProbeObj {                // [probe]: here usually sensorless on Z
     bool present = false;
     int endstop = -1;
     double x_offset = 0, y_offset = 0, z_offset = 0, speed = 5, lift_speed = 5;
+};
+
+// [gcode_macro NAME] / [homing_override]: plain G-code lines (no Jinja templates)
+struct MacroObj {
+    std::string name;                    // upper case, as typed in the console
+    std::vector<std::string> lines;
 };
 
 struct BoardPlan {
@@ -169,6 +184,22 @@ struct BoardPlan {
     std::vector<EndstopObj> endstops;
     PrinterLimits printer;
     ProbeObj probe;
+    ShapingConfig shaping;               // [input_shaper] + [extruder] pressure_advance (CAPTAIN / SKIPPER)
+    MeshConfig mesh;                     // [bed_mesh]
+    BedMesh mesh_default;                // [bed_mesh default]: the saved mesh, used from the start
+    ScrewsConfig screws;                 // [screws_tilt_adjust]
+    RetractConfig retract;               // [firmware_retraction]
+    double arc_resolution = 1.0;         // [gcode_arcs] resolution (mm)
+    ResonanceParams resonance;           // [resonance_tester]
+    bool resonance_point_set = false;
+    double resonance_point[3] = {0, 0, 0};
+    std::vector<MacroObj> macros;        // [gcode_macro ...]
+    std::vector<std::string> homing_override;   // [homing_override] gcode: G28 runs these instead
+    std::string homing_override_axes = "xyz";   // only when homing one of these (Klipper's "axes")
+    // Klipper's set_position_x/y/z: the axis is assumed to be here before the override runs (so it
+    // can lift Z before homing X and Y). NAN: not set.
+    double homing_override_set[3] = {NAN, NAN, NAN};
+    const MacroObj* macro(const std::string& name) const;
     int move_count = 0;          // the board's move queue size (get_config), set after configuring
     double clock_freq = 0;
     double adc_full_scale = 0;           // sample_count * ADC_MAX: what analog_in_state reports at 100 %
@@ -193,6 +224,9 @@ bool apply_adc_message(BoardPlan& plan, const Message& m);
 
 // TMC2209 register values for a driver, as Klipper's tmc2209.py would send them (exposed for tests).
 // microsteps 1..256, rotation_distance and full_steps for the stealthChop threshold.
+// Klipper's TMCCurrentHelper: the CS value (0-31) for a current in amps RMS, and back.
+int tmc2209_cs(double current, bool vsense, double rsense);
+double tmc2209_current(int cs, bool vsense, double rsense);
 bool tmc2209_registers(TmcObj& t, int microsteps, double rotation_distance, int full_steps, double sense_resistor,
                        bool has_stealth, double stealth_velocity, bool interpolate, std::string* err);
 

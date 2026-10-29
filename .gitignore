@@ -1,4 +1,7 @@
 build/
+build-captain/
+build-skipper/
+build-captain-int/
 *.o
 __pycache__/
 *.pyc

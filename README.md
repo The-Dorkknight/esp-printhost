@@ -15,23 +15,27 @@ Licensed under the GNU General Public License v3.0, see [LICENSE](LICENSE). **No
 
 An idea for reviving old, donated 3D printers: a cheap ESP32-S3 becomes the "brain" (WiFi, web UI, text config, motion planning) and the printer's original board becomes a simple slave running a modified Klipper MCU firmware. The full plan is in [docs/DESIGN.md](docs/DESIGN.md).
 
-**Target hardware: ESP32-S3 only** for the host ("master"). **Status: mostly working, needs tuning and proper testing.** On real hardware (see [docs/HARDWARE_LOG.md](docs/HARDWARE_LOG.md)), installed in a WEEDO Tina 2 with a BTT SKR Pico: the WiFi status page, console and `printer.cfg` editor; the Klipper link, clock sync, board configuration and recovery from board power cycles; temperatures, heating, PID tuning and Klipper's heater safety checks; the motor test; TMC2209 set-up; stallGuard triggering; the hotend fan. **Not yet confirmed:** the part-cooling fan and the third fan output (possibly a broken wire; will update when tested). **Needs tuning:** stallGuard threshold, motor current, speeds, `rotation_distance`. **Only simulated so far:** moves, full homing and probing, and printing a file. The whole story, including every mistake: **[A Frankenstein Experience](docs/paper/A_FRANKENSTEIN_EXPERIENCE.md)** ([PDF](docs/paper/A_FRANKENSTEIN_EXPERIENCE.pdf)).
+**Target hardware: ESP32-S3 only** for the host ("master"). **Status: mostly working, needs tuning and proper testing.** On real hardware (see [docs/HARDWARE_LOG.md](docs/HARDWARE_LOG.md)), installed in a WEEDO Tina 2 with a BTT SKR Pico: the WiFi status page, console and `printer.cfg` editor; the Klipper link, clock sync, board configuration and recovery from board power cycles; temperatures, heating, PID tuning and Klipper's heater safety checks; the motor test; TMC2209 set-up; stallGuard triggering; the hotend fan; a micro SD card for big G-code files ([docs/SD_CARD.md](docs/SD_CARD.md): mounts, lists, uploads). **Not yet confirmed:** the part-cooling fan and the third fan output (possibly a broken wire; will update when tested). **Needs tuning:** stallGuard threshold, motor current, speeds, `rotation_distance`. **Only simulated so far:** moves, full homing and probing, and printing a file. **New (2026-10-20), not yet on hardware:** three builds by board memory with a one-click Flasher choice ([docs/TIERS.md](docs/TIERS.md)), slicer uploads, home WiFi and crash reports. **New (2026-10-23), not yet on hardware:** a cheap I2C OLED shows temperatures, print progress and what the printer is doing ([docs/OLED.md](docs/OLED.md)). **New (2026-10-24), not yet on hardware:** Klipper's input shaping and pressure advance, automatic input shaper calibration with an accelerometer it finds by itself, bed mesh with a coloured heightmap, screw tilt, arcs, firmware retraction, exclude object and tuning tower on CAPTAIN and SKIPPER ([docs/TUNING.md](docs/TUNING.md)). **New (2026-10-27), not yet on hardware:** CoreXY, Z homing on a probe, `gear_ratio`, a chamber thermistor on the ESP32 ([docs/CHAMBER_SENSOR.md](docs/CHAMBER_SENSOR.md)) and a QIDI X-Smart 3 test-bench config ([docs/configs/qidi-xsmart3-skr-pico.md](docs/configs/qidi-xsmart3-skr-pico.md)). **New (2026-10-28), not yet on hardware:** a print benchmark that times every stage of the motion pipeline with nothing moving, an int32/int64 motion test build for CAPTAIN, and a log of important events ([docs/BENCHMARK.md](docs/BENCHMARK.md)). The whole story, including every mistake: **[A Frankenstein Experience](docs/paper/A_FRANKENSTEIN_EXPERIENCE.md)** ([PDF](docs/paper/A_FRANKENSTEIN_EXPERIENCE.pdf)).
 
 | Part | State |
 |---|---|
 | Klipper wire protocol (CRC16, VLQ ints, framing, resync, data dictionary) | Unit-tested; **works on hardware** (ESP32-S3 to SKR Pico) |
 | ESP32-S3 firmware (`firmware/esp32s3`): WiFi access point, status page, console, `printer.cfg` editor, test bench, printer page, the Klipper host's jobs (heaters, TMC2209, moves, homing, printing from flash). Shipped ready to flash | **On hardware** (to 2026-10-14): link, heating, PID, motor test, TMC2209, stallGuard trigger. Moves, homing and printing: simulation only |
-| `skr-pico-uart` printer-board firmware (Klipper v0.13.0 + segment queue, serial on UART0) | **Works on hardware**: link, heater, thermistor, steppers, TMC UART, DIAG pins. The segment queue is not used by the ESP32 host |
-| Segment-queue core (`firmware/skipper/segq_core.*`, shared by the firmware and the PC tests) | Working in simulation: exact step counts, step spacing, ring buffer, start threshold, underrun, stop |
+| `skr-pico-uart` printer-board firmware (**plain Klipper v0.13.0**, serial on UART0; the ESP32-S3 firmware is the only bespoke part) | **Works on hardware**: link, heater, thermistor, steppers, TMC UART, DIAG pins (with the 2026-10-10 build, which also held the since-removed, never-used segment queue; [why it went](docs/research/segq-retired.md)) |
 | Motion planner + G-code engine (lookahead, junction deviation, trapezoids, pressure advance, G-code state) | Working in simulation: output is run through the real core and checked for exact positions, speed and acceleration limits |
 | Other board presets (generic RP2040, Creality 4.2.x, RAMPS mega2560, Ender-3 1.1.x, USB SKR Pico) | **Compile only**; never run on hardware |
 | Flasher app (`flasher.py`): Slave tab (printer board) and Master tab (ESP32-S3) | ESP32-S3 flashing **used on hardware** on Linux Mint. Other paths (SD card, avrdude, Windows/macOS) tested with mocks only |
 | Firmware build tool (CLI + Slave tab "My own build") | Works on Linux (sandbox and the author's Linux Mint laptop); Windows needs WSL |
 | `mcu_probe`, `fake_mcu.py`, one-command setup, Tools window | Working on Linux Mint. Probe tried on an SKR Pico over USB |
 | Real printing | Built and **simulated only** (upload, print from flash, pause / resume / cancel); not yet run on the printer |
+| Micro SD card (`firmware/esp32s3/main/sdcard.c`) | **Works on hardware** (2026-10-19: mount, file list, upload; printing from it not yet tried): SPI card for big G-code files, file list / print / delete on the Printer page, `SDCARD_PRINT_FILE FILENAME=`, M20/M23/M24 (the command side is unit-tested). See [docs/SD_CARD.md](docs/SD_CARD.md) |
+| Buttons on the case (`firmware/esp32s3/main/panel.cpp`, `host/src/panel.cpp`) | **Touch works on hardware** (2026-10-26: Preheat and Home from staple pads melted into the Tina 2's case); up to four touch pads (bolts on wires) or switches: Preheat, Home and E-stop (both on a 1 s hold), Unload, and more. CAPTAIN and SKIPPER. See [docs/BUTTONS.md](docs/BUTTONS.md) |
+| Tuning (`host/src/shaping.cpp`, `resonance.cpp`, `bedmesh.cpp`, `machine_pro.cpp`; Tune page) | **Built, PC-tested and run in QEMU, not yet on a printer** (2026-10-24): input shaping, pressure advance, accelerometer search and shaper calibration (matches Klipper's), bed mesh, screw tilt, arcs, G10/G11, exclude object, tuning tower. USB accelerometer: compile-only. CAPTAIN and SKIPPER only. See [docs/TUNING.md](docs/TUNING.md) |
+| Little OLED display (`firmware/esp32s3/main/oled.cpp`, `components/ktft_oled`) | **Works on hardware** (2026-10-26: temperatures and the shutdown screen on a 0.96" OLED in the Tina 2); built 2026-10-23: SSD1306 / SSD1315 / SH1106, 128x64 or 128x32, on GPIO8/9: temperatures, progress bar, HEATING / HOMING / EXTRUDING / LOADING, "no board" with the WiFi name and password. See [docs/OLED.md](docs/OLED.md) |
+| Three builds by board memory: DECKHAND / CAPTAIN / SKIPPER ([docs/TIERS.md](docs/TIERS.md)), Flasher "Flash for my board" | **CAPTAIN runs on hardware** (2026-10-20: picked by the Flasher, 2 MB PSRAM found and used); not yet tried there: WiFi firmware updates, bigger look-ahead with PSRAM, slicer upload (OctoPrint-style), home WiFi, thumbnails, print history, event log, printer.cfg backups, crash reports |
 | Fans | Hotend fan **confirmed on hardware**; part-cooling fan and the third fan output not yet (possibly a broken wire, will update when tested) |
 
-Total checks: 1,029 C++ unit checks and 187 Python tests (including power-cycle, stallGuard and printing runs against a simulated board), all passing in the sandbox. Passing tests mean the maths and bookkeeping are right, not that a printer will behave.
+Total checks: 1,825 C++ unit checks (run twice: with double and with integer motion maths), the OLED layout tests and 190 Python tests (including power-cycle, stallGuard and printing runs against a simulated board), all passing in the sandbox. Passing tests mean the maths and bookkeeping are right, not that a printer will behave.
 
 ## Screenshots
 
@@ -82,7 +86,7 @@ macOS: the C++ library and tests build (`python3 host/tools/build.py`), but `mcu
 
 ## Building and flashing firmware
 
-Open the **Firmware** tab (or use `python3 host/tools/skipper_fw.py`), pick your board, then **Check tools**, **Fetch Klipper**, **Build**. The tool downloads Klipper v0.13.0 from GitHub into `~/.skipper-flipper/`, adds the segment queue, builds with the board's preset and saves the result with a SHA-256 list. **Flash...** shows what it is about to do and asks first. Details, per-board warnings and the speed arithmetic are in [docs/FIRMWARE.md](docs/FIRMWARE.md).
+Open the **Firmware** tab (or use `python3 host/tools/skipper_fw.py`), pick your board, then **Check tools**, **Fetch Klipper**, **Build**. The tool downloads Klipper v0.13.0 from GitHub into `~/.skipper-flipper/`, builds it unmodified with the board's preset (Klipper's own menuconfig choices only) and saves the result with a SHA-256 list. **Flash...** shows what it is about to do and asks first. Details, per-board warnings and the speed arithmetic are in [docs/FIRMWARE.md](docs/FIRMWARE.md).
 
 **Warning:** wrong or untested firmware can leave a board unresponsive until it is re-flashed through its bootloader. Do not flash a printer you cannot afford to recover. Presets are marked `compile-only / unverified` for a reason.
 
@@ -119,16 +123,15 @@ Tested so far: BTT SKR Pico (RP2040, Klipper v0.10.0-181). The probe identified 
 
 ## Known limitations
 
-- **Only the link and the SKR Pico's LED have run on hardware** (ESP32-S3 and SKR Pico); clock sync, `printer.cfg` and the `SET_LED` console also ran on it for about 41 minutes (docs/HARDWARE_LOG.md); the reset-and-reconfigure after editing `printer.cfg` has not been tried on hardware. Pin polarity, DDA timer load, shutdown behaviour inside the timer, and bootloader details for the other boards are assumptions that compile but are untested. The DDA rates (8 to 40 kHz) cap speed: maximum step rate per axis is half the DDA rate.
+- **Only the link and the SKR Pico's LED have run on hardware** (ESP32-S3 and SKR Pico); clock sync, `printer.cfg` and the `SET_LED` console also ran on it for about 41 minutes (docs/HARDWARE_LOG.md); the reset-and-reconfigure after editing `printer.cfg` has not been tried on hardware. Bootloader details for the other boards are assumptions that compile but are untested.
 - **Heater, fan and motor control is new and has only run in simulation** (`fake_mcu.py` and unit tests; see docs/TEST_BENCH.md). It follows Klipper's heater safety (board-side `max_duration` and ADC range checks, `verify_heater`, emergency stop), but has not been tried on real hardware: stay with the printer, keep a hand on the power switch, and do not rely on it unattended. Moves, homing and printing are newer still and have only run in simulation.
 - **Pin toggle is not physically confirmed.** On the SKR Pico the test used `gpio24`, which (as far as we can tell from BTT's pin map, not verified) is the NeoPixel/RGB header. A NeoPixel needs a timed data stream, so a plain on/off will not light one. The protocol side worked; try a pin with a visible LED or a multimeter on it.
 - `finalize_config` is sent with a fixed placeholder CRC, which is fine for stock firmware but is not a real config checksum yet.
 - The ESP-IDF build of the library is untested; only the PC build is exercised. The planner emits about one segment per tiny move, so link bandwidth for very fine G-code is unmeasured.
-- Not in the segment queue yet: sync pin actions, endstop homing during a segment.
 - `mcu_probe` is Linux-only.
 - The GitHub workflows in `.github/workflows/` have not been run yet.
 - Presets for boards with clone chips (some Creality 4.2.x) are flagged unverified; check your chip.
-- Design documents describe intent, not finished work. Segment-queue commands (`segq_*`) are a draft and exist only in the simulator.
+- Design documents describe intent, not finished work.
 
 ## Project layout
 
@@ -136,13 +139,11 @@ Tested so far: BTT SKR Pico (RP2040, Klipper v0.10.0-181). The probe identified 
 printhost.py          one-command setup + launcher
 flasher.py            the Flasher window (also Flasher.bat / Flasher.command)
 HOW_IT_WORKS.md       what it reads, changes and never does
-docs/                 DESIGN, PROTOCOL (draft v1), ENGINE, FIRMWARE, TASKS, project page
-firmware/skipper/     segq_core (portable C core) + segq.c (Klipper glue)
+docs/                 DESIGN, PROTOCOL, ENGINE, FIRMWARE, TUNING, TASKS, project page
 firmware/esp32s3/       ESP32-S3 firmware (ESP-IDF project) + build.sh
 firmware/prebuilt-esp32s3/  shipped ESP32-S3 image
 firmware/boards/      board presets (.config + .json)
-firmware/prebuilt/    shipped firmware per board (+ pin tables); refresh with skipper_fw.py bundle
-firmware/test/        PC simulation of the Klipper glue
+firmware/prebuilt/    shipped plain-Klipper firmware per board (+ pin tables); refresh with skipper_fw.py bundle
 host/                 portable C++17 core (also an ESP-IDF component, untested)
   include/ph/         wire, msgproto, json_mini, config_ini, gcode, motion, planner, engine
   src/  test/         implementation + 480 unit tests
@@ -156,6 +157,6 @@ See [docs/TASKS.md](docs/TASKS.md). Next: real Klipper behaviour on the ESP32-S3
 
 ## Contributing, security, third-party
 
-[docs/HARDWARE_LOG.md](docs/HARDWARE_LOG.md) (everything tested on real hardware) · [docs/WIRING_SKR_PICO.md](docs/WIRING_SKR_PICO.md) (ESP32-S3 to SKR Pico wiring) · [docs/TEST_BENCH.md](docs/TEST_BENCH.md) (test page and heater safety) · [docs/TINA2_INSTALL.md](docs/TINA2_INSTALL.md) (WEEDO Tina 2 installation) · [docs/research/klipper-sources.md](docs/research/klipper-sources.md) (research notes) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [THIRD_PARTY.md](THIRD_PARTY.md) · [CHANGELOG.md](CHANGELOG.md)
+[docs/HARDWARE_LOG.md](docs/HARDWARE_LOG.md) (everything tested on real hardware) · [docs/WIRING_SKR_PICO.md](docs/WIRING_SKR_PICO.md) (ESP32-S3 to SKR Pico wiring) · [docs/TEST_BENCH.md](docs/TEST_BENCH.md) (test page and heater safety) · [docs/TUNING.md](docs/TUNING.md) (input shaping, pressure advance, bed mesh, screw tilt) · [docs/BUTTONS.md](docs/BUTTONS.md) (touch pads / buttons on the case) · [docs/TINA2_INSTALL.md](docs/TINA2_INSTALL.md) (WEEDO Tina 2 installation) · [docs/configs/qidi-xsmart3-skr-pico.md](docs/configs/qidi-xsmart3-skr-pico.md) (QIDI X-Smart 3 test bench) · [docs/CHAMBER_SENSOR.md](docs/CHAMBER_SENSOR.md) (chamber thermistor) · [docs/BENCHMARK.md](docs/BENCHMARK.md) (benchmark, integer test build, important events) · [docs/research/klipper-sources.md](docs/research/klipper-sources.md) (research notes; [how fast can it go](docs/research/klipper-grade-performance.md)) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [THIRD_PARTY.md](THIRD_PARTY.md) · [CHANGELOG.md](CHANGELOG.md)
 
 Copyright (C) 2026 Matthew Armstrong ([The-Dorkknight](https://github.com/The-Dorkknight)).

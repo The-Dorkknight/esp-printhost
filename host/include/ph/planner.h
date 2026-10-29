@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Matthew Armstrong (https://github.com/The-Dorkknight)
 // SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 // Cartesian look-ahead motion planner producing constant-velocity DDA segments
-// for the MCU segment queue (firmware/skipper/segq_core.h). See docs/ENGINE.md.
+// for the toolhead (constant-speed pieces, turned into queue_step). See docs/ENGINE.md.
 #pragma once
 #include "ph/motion.h"
 #include <cstddef>

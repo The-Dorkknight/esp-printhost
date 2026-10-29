@@ -87,74 +87,29 @@ class Client:
         return res
 
 
-class FakeMcuSegq(unittest.TestCase):
+class FakeMcuPlainKlipper(unittest.TestCase):
+    """The simulated board speaks plain Klipper only (the segment queue was removed 2026-10-25)."""
     def setUp(self):
         self.c = Client()
 
     def tearDown(self):
         self.c.close()
 
-    def test_dictionary_has_protocol_v1(self):
+    def test_dictionary_has_no_segment_queue(self):
         d = self.c.dict
-        for f in ("config_segq oid=%c period=%u depth=%c start_threshold=%c",
-                  "config_segq_axis oid=%c axis=%c step_pin=%u dir_pin=%u invert_step=%c invert_dir=%c",
-                  "segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu",
-                  "segq_stop oid=%c", "segq_query oid=%c"):
-            self.assertIn(f, d["commands"])
-        for f in ("segq_status oid=%c free=%c active=%c tag=%hu underruns=%hu",
-                  "segq_position oid=%c x=%i y=%i z=%i e=%i"):
-            self.assertIn(f, d["responses"])
-        self.assertEqual(d["config"]["SEGQ_PROTOCOL"], 1)
+        self.assertFalse([f for f in list(d["commands"]) + list(d["responses"]) if "segq" in f])
+        self.assertFalse([k for k in d["config"] if k.startswith("SEGQ")])
+        self.assertIn("queue_step oid=%c interval=%u count=%hu add=%hi", d["commands"])
 
-    def test_push_and_query_sums_positions(self):
+    def test_config_round_trip(self):
         c = self.c
-        c.cmd("config_segq oid=%c period=%u depth=%c start_threshold=%c", 2, 600, 64, 4)
-        c.cmd("config_segq_axis oid=%c axis=%c step_pin=%u dir_pin=%u invert_step=%c invert_dir=%c", 2, 0, 11, 10, 0, 1)
-        c.cmd("segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu", 2, 100, 50, -3, 0, -40, 0, 7)
-        c.cmd("segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu", 2, 1 << 30, 5, 0, 0, 0, 2, 8)
-        r = c.cmd("segq_query oid=%c", 2)
-        names = [n for n, _ in r]
-        self.assertEqual(names, ["segq_status", "segq_position"])
-        self.assertEqual(r[0][1], {"oid": 2, "free": 64, "active": 0, "tag": 8, "underruns": 0})
-        self.assertEqual(r[1][1], {"oid": 2, "x": 55, "y": -3, "z": 0, "e": -40})
-
-    def test_invalid_segment_shuts_down(self):
-        c = self.c
-        c.cmd("config_segq oid=%c period=%u depth=%c start_threshold=%c", 0, 600, 8, 1)
-        r = c.cmd("segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu", 0, 10, 6, 0, 0, 0, 0, 1)  # 2*6 > 10
-        self.assertEqual(r[0][0], "shutdown")
-        r = c.cmd("segq_query oid=%c", 0)
-        self.assertEqual(r[0][0], "is_shutdown")
-
-    def test_push_without_config_and_bad_config(self):
-        r = self.c.cmd("segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu", 1, 10, 0, 0, 0, 0, 0, 0)
-        self.assertEqual(r[0][0], "shutdown")
-
-    def test_bad_period_and_duplicate_oid(self):
-        for period in (0, (1 << 30) + 1, 0x80000000):
-            c = Client()
-            try:
-                r = c.cmd("config_segq oid=%c period=%u depth=%c start_threshold=%c", 0, period, 8, 1)
-                self.assertEqual(r[0][0], "shutdown", period)
-            finally:
-                c.close()
-        c = Client()
-        try:
-            c.cmd("config_segq oid=%c period=%u depth=%c start_threshold=%c", 0, 1 << 30, 8, 1)
-            r = c.cmd("config_segq oid=%c period=%u depth=%c start_threshold=%c", 0, 600, 8, 1)
-            self.assertEqual(r[0][0], "shutdown")
-        finally:
-            c.close()
-
-    def test_zero_n_and_too_long(self):
-        for n in (0, (1 << 30) + 1):
-            c = Client()
-            try:
-                c.cmd("config_segq oid=%c period=%u depth=%c start_threshold=%c", 0, 600, 8, 1)
-                r = c.cmd("segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu", 0, n, 0, 0, 0, 0, 0, 0)
-                self.assertEqual(r[0][0], "shutdown", n)
-            finally:
-                c.close()
+        c.cmd("allocate_oids count=%c", 1)
+        c.cmd("config_digital_out oid=%c pin=%u value=%c default_value=%c max_duration=%u", 0, 13, 0, 0, 0)
+        c.cmd("finalize_config crc=%u", 1234)
+        r = c.cmd("get_config")
+        self.assertEqual(r[0][0], "config")
+        self.assertEqual(r[0][1]["is_config"], 1)
+        self.assertEqual(r[0][1]["crc"], 1234)
 
 
 if __name__ == "__main__":

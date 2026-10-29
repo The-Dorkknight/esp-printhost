@@ -7,9 +7,8 @@
     ./build/mcu_probe /dev/pts/7 250000 --blink PA5
 
 Implements: identify, get_uptime, get_config, allocate_oids,
-config_digital_out, finalize_config, update_digital_out, and the Skipper
-Flipper segment-queue protocol v1 (config_segq, config_segq_axis, segq_push,
-segq_stop, segq_query -> segq_status + segq_position).
+config_digital_out, finalize_config, update_digital_out (plain Klipper
+commands only: the retired segment queue was removed on 2026-10-25).
 Sequence numbers and NAKs behave like Klipper's command.c.
 
 Also a simulated printer (for ph::Machine tests), modelled on Klipper's
@@ -39,11 +38,6 @@ failure, not a measured behaviour. Garbage on the line is handled like
 Klipper's src/command.c: bytes are discarded up to the next 0x7e, with one
 NAK; leading 0x7e bytes are ignored.
 
-THE SEGMENT QUEUE HERE IS A SIMULATOR, not the real thing: segq_push is
-validated with the same rules as firmware/skipper/segq_core.c (1<=n<=2^30,
-2*|steps|<=n) but is applied instantly: positions are summed, the queue is
-always empty (free=depth, active=0, underruns=0) and no time passes. It lets
-host code test encoding, flow and error handling, not timing.
 """
 import select
 import json, os, pty, signal, sys, time, tty, zlib
@@ -79,12 +73,7 @@ COMMANDS = {
     "finalize_config crc=%u": 8,
     "config_digital_out oid=%c pin=%u value=%c default_value=%c max_duration=%u": 12,
     "update_digital_out oid=%c value=%c": 13,
-    "segq_push oid=%c n=%u x=%i y=%i z=%i e=%i flags=%c tag=%hu": 40,
     "reset": 41,
-    "config_segq oid=%c period=%u depth=%c start_threshold=%c": 42,
-    "config_segq_axis oid=%c axis=%c step_pin=%u dir_pin=%u invert_step=%c invert_dir=%c": 43,
-    "segq_stop oid=%c": 44,
-    "segq_query oid=%c": 45,
     "config_neopixel oid=%c pin=%u data_size=%hu bit_max_ticks=%u reset_min_ticks=%u": 54,
     "neopixel_update oid=%c pos=%hu data=%*s": 53,
     "neopixel_send oid=%c": 52,
@@ -115,8 +104,6 @@ RESPONSES = {
     "config is_config=%c crc=%u is_shutdown=%c move_count=%hu": 82,
     "shutdown clock=%u static_string_id=%hu": 83,
     "is_shutdown static_string_id=%hu": 84,
-    "segq_status oid=%c free=%c active=%c tag=%hu underruns=%hu": 85,
-    "segq_position oid=%c x=%i y=%i z=%i e=%i": 86,
     "neopixel_result oid=%c success=%c": 87,
     "clock clock=%u": 88,
     "analog_in_state oid=%c next_clock=%u value=%hu": 89,
@@ -125,15 +112,8 @@ RESPONSES = {
     "tmcuart_response oid=%c read=%*s": 92,
     "endstop_state oid=%c homing=%c next_clock=%u pin_value=%c": 93,
 }
-SEGQ_MAX_N = 1 << 30
-SEGQ_MAX_DEPTH = 255
-SEGQ_MAX_PERIOD = 1 << 30
 STATIC = {"Invalid oid type": 1, "Can not update pin while configured": 2,
-          "segq: invalid segment (n==0, too long, or steps > n/2)": 3,
-          "segq: bad config_segq arguments": 4, "segq: axis out of range": 5,
-          "segq: queue overflow (host flow-control bug)": 6,
           "Can't assign oid": 7,
-          "segq DDA timer too slow: raise period / lower dda_hz": 8,
           "Invalid neopixel data_size": 9, "Invalid neopixel update command": 10,
           "Already finalized": 11, "Missed scheduling of next digital out event": 21,
           "Scheduled digital out event will exceed max_duration": 19, "ADC out of range": 26,
@@ -141,48 +121,12 @@ STATIC = {"Invalid oid type": 1, "Can not update pin while configured": 2,
           "Timer too close": 3, "Can not set soft pwm cycle ticks while updates pending": 12}
 DICT = zlib.compress(json.dumps({
     "version": "fake-mcu-1", "build_versions": "python",
-    "config": {"MCU": "fake_stm32f103", "CLOCK_FREQ": 72000000, "ADC_MAX": 4095,
-               "SEGQ_PROTOCOL": 1, "SEGQ_MAX_DEPTH": SEGQ_MAX_DEPTH, "SEGQ_AXES": 4},
+    "config": {"MCU": "fake_stm32f103", "CLOCK_FREQ": 72000000, "ADC_MAX": 4095},
     "enumerations": {"pin": {"PA0": [0, 16], "PB0": [16, 16], "PC13": 45},
                      "static_string_id": STATIC},
     "commands": COMMANDS, "responses": RESPONSES,
 }).encode())
 BY_ID = {i: f for f, i in COMMANDS.items()}
-
-def segq_command(segq, name, a, out):
-    """Simulated segment queue (instant). Returns a STATIC key on shutdown, else None."""
-    oid = a["oid"]
-    if name == "config_segq":
-        if oid in segq:
-            return "Can't assign oid"      # Klipper oid_alloc: oid already in use
-        if not (a["period"] & 0xFFFFFFFF) or (a["period"] & 0xFFFFFFFF) > SEGQ_MAX_PERIOD or not a["depth"] or a["depth"] > SEGQ_MAX_DEPTH or a["start_threshold"] > a["depth"]:
-            return "segq: bad config_segq arguments"
-        segq[oid] = {"depth": a["depth"], "pos": [0, 0, 0, 0], "tag": 0, "axes": {}}
-        print(f"config_segq oid {oid} period {a['period']} depth {a['depth']} start {a['start_threshold']}", flush=True)
-        return None
-    if oid not in segq:
-        return "Invalid oid type"
-    q = segq[oid]
-    if name == "config_segq_axis":
-        if a["axis"] > 3:
-            return "segq: axis out of range"
-        q["axes"][a["axis"]] = (a["step_pin"], a["dir_pin"])
-        print(f"segq axis {a['axis']} step_pin {a['step_pin']} dir_pin {a['dir_pin']}", flush=True)
-    elif name == "segq_push":
-        n = a["n"] & 0xFFFFFFFF
-        st = [a["x"], a["y"], a["z"], a["e"]]
-        if n < 1 or n > SEGQ_MAX_N or any(2 * abs(v) > n for v in st):
-            return "segq: invalid segment (n==0, too long, or steps > n/2)"
-        q["pos"] = [p + v for p, v in zip(q["pos"], st)]
-        q["tag"] = a["tag"]
-        print(f"segq segment n={n} steps={st} flags={a['flags']} tag={a['tag']}", flush=True)
-    elif name == "segq_stop":
-        print("segq stop", flush=True)
-    elif name == "segq_query":
-        out += enc(85) + enc(oid) + enc(q["depth"]) + enc(0) + enc(q["tag"]) + enc(0)
-        out += enc(86) + enc(oid) + sum((enc(v) for v in q["pos"]), [])
-    return None
-
 
 import math
 
@@ -526,7 +470,6 @@ def main():
     configured, pins, shutdown_id = False, {}, 0
     config_crc = 0
     neo = {}    # oid -> {'pin', 'size', 'buf', 'shown'}
-    segq = {}   # oid -> {'depth','pos','tag','axes'}
     adc = {}    # oid -> {'pin', 'rest_s', 'count', 'due'}   (query_analog_in running)
     adc_pins = {}   # oid -> pin number from config_analog_in
     PA4 = 4         # simulated: PA4 has nothing connected (reads open circuit)
@@ -538,9 +481,9 @@ def main():
     signal.signal(signal.SIGUSR1, on_usr1)
 
     def boot():
-        nonlocal configured, pins, shutdown_id, segq, neo, config_crc, adc, adc_pins, printer, next_seq, buf, t0
+        nonlocal configured, pins, shutdown_id, neo, config_crc, adc, adc_pins, printer, next_seq, buf, t0
         configured, pins, shutdown_id = False, {}, 0
-        segq, neo, config_crc, adc, adc_pins = {}, {}, 0, {}, {}
+        neo, config_crc, adc, adc_pins = {}, 0, {}, {}
         printer = Printer(tmc_dead, no_heat, no_diag)
         next_seq, buf, t0 = 0, b"", time.time()
         need_sync[0] = False
@@ -667,6 +610,15 @@ def main():
                         continue
                     print("RESET (reboot)", flush=True)
                     boot()
+                    # a real board is gone for a while: what arrives meanwhile is lost (else the rest
+                    # of a blind reset could reset the freshly booted fake a second time)
+                    time.sleep(0.05)
+                    while select.select([master], [], [], 0)[0]:
+                        try:
+                            if not os.read(master, 4096):
+                                break
+                        except OSError:
+                            break
                     rebooted = True
                     break
                 if name == "identify":
@@ -680,7 +632,8 @@ def main():
                     clk = int((time.time() - t0) * 72e6)
                     out += enc(81) + enc(clk >> 32) + enc(clk & 0xFFFFFFFF)
                 elif name == "get_config":
-                    out += enc(82) + enc(int(configured)) + enc(config_crc) + enc(int(bool(shutdown_id))) + enc(0)
+                    # like Klipper: the move queue exists (and is reported) only once configured
+                    out += enc(82) + enc(int(configured)) + enc(config_crc) + enc(int(bool(shutdown_id))) + enc(1024 if configured else 0)
                 elif name == "finalize_config":
                     if configured:
                         shutdown_id = STATIC["Already finalized"]
@@ -761,12 +714,6 @@ def main():
                         print("SHUTDOWN: Invalid oid type", flush=True)
                         continue
                     print(f"pin {pins.get(args['oid'])} = {args['value']}", flush=True)
-                elif name.startswith("segq_") or name.startswith("config_segq"):
-                    err = segq_command(segq, name, args, out)
-                    if err:
-                        shutdown_id = STATIC[err]
-                        out += enc(83) + enc(0) + enc(shutdown_id)
-                        print("SHUTDOWN: " + err, flush=True)
             if not rebooted:
                 send(out)
 
