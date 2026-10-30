@@ -3,7 +3,7 @@
 Status: ✅ done · 🔬 works on real hardware · 🟡 next · ⬜ later. What has run on hardware is listed in
 [HARDWARE_LOG.md](HARDWARE_LOG.md).
 
-**Overall (2026-10-14): mostly working, needs tuning and proper testing.** In a WEEDO Tina 2 with an SKR Pico: heating, PID, safety checks, motor tests, TMC2209, stallGuard triggering and the hotend fan work on hardware. The part-cooling fan and third fan output are not confirmed yet (possibly a broken wire; will update when tested). Moves, homing and printing are simulated only.
+**Overall (2026-10-29): mostly working, needs tuning and proper testing.** In a WEEDO Tina 2 with an SKR Pico: heating, PID, safety checks, motor tests, TMC2209, stallGuard, full homing of X, Y and Z, a whole print file (run in mid-air: no usable Z offset on the Tina 2), WiFi updates, the SD card, OLED, touch buttons and the print and motion benchmarks work on hardware. Not yet: a real printed part, the tuning features on a moving printer, the part-cooling fan and third fan output. Next: the integer input shaper in every build, sending without waiting for each acknowledgement, and the QIDI X-Smart 3 test bench (the Tina 2 is retired as the bench).
 
 ## Done
 

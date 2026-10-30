@@ -47,7 +47,7 @@ a{color:var(--fg)}
 <div class="strip"></div>
 <div class="wrap">
 <img class="hero" src="images/skipper-flipper.webp" width="1408" height="768" alt="Skipper Flipper: an experimental ESP32 pseudo Klipper port. A cartoon dolphin in a captain's hat steers a 3D-printed paddle boat.">
-<p class="lead">A WiFi "brain" for old 3D printers. <strong>Mostly working, needs tuning and proper testing:</strong> installed in a WEEDO Tina 2 with a BTT SKR Pico, it heats, PID-tunes, runs the motors and TMC2209 drivers and triggers stallGuard from a phone. Printing a file has only run in simulation so far.</p>
+<p class="lead">A WiFi "brain" for old 3D printers. <strong>Mostly working, needs tuning and proper testing:</strong> installed in a WEEDO Tina 2 with a BTT SKR Pico, it heats, PID-tunes, homes all three axes and has run a whole print file from a phone (in mid-air: no real part printed yet). Updated 29 October 2026.</p>
 <div class="btns">
   <a class="btn p" id="repo" href="https://github.com/The-Dorkknight/esp-printhost">View on GitHub</a>
   <a class="btn" id="rel" href="https://github.com/The-Dorkknight/esp-printhost/releases">Releases</a>
@@ -57,22 +57,22 @@ a{color:var(--fg)}
 <h2>What works today (WEEDO Tina 2 + SKR Pico + ESP32-S3)</h2>
 <div class="cards">
   <div class="card"><h3>Heating, with Klipper's safety</h3><p>Thermistors, heater PWM, PID tuning, the heater test and the safety shutdowns all work on real hardware. Needs proper testing over longer runs.</p></div>
-  <div class="card"><h3>Motors and TMC2209</h3><p>Motor tests turn the motors, every TMC2209 answers, and stallGuard triggers. The threshold, motor current, speeds and rotation_distance still need tuning (there are boxes for that on the Test bench).</p></div>
+  <div class="card"><h3>Motors, homing and a first print run</h3><p>Every TMC2209 answers, stallGuard triggers, and full homing of X, Y and Z works (27 October). A whole print file ran end to end the same evening, in mid-air: the Tina 2's flexible Z gave no reliable Z offset, so it is retired as the test bench in favour of a QIDI X-Smart 3.</p></div>
   <div class="card"><h3>Fans</h3><p>The hotend fan is confirmed working. The part-cooling fan and the third fan output have not run yet: possibly a broken wire. Will update when tested.</p></div>
   <div class="card"><h3>Klipper link and phone UI</h3><p>The ESP32-S3 identifies, configures and clock-syncs the board over four jumper wires, recovers from board power cycles, and serves the status page, console, printer.cfg editor, Test bench and Printer page from its own WiFi.</p></div>
-  <div class="card"><h3>Simulated only</h3><p>Moves, full homing and probing, and printing an uploaded G-code file: tested against a simulated board and in 1,000+ unit checks, not yet on the printer.</p></div>
-  <div class="card"><h3>Tuning</h3><p>New, not yet on a printer: Klipper's input shaping and pressure advance, an accelerometer it finds on its own, bed mesh with a coloured heightmap and screw tilt. <a href="TUNING.md">Tuning guide</a>.</p></div>
-  <div class="card"><h3>Buttons on the case</h3><p>New, not yet on a printer: bolts through the case as touch pads (or plain switches) for preheat, home, unload and a held E-stop. <a href="BUTTONS.md">Buttons guide</a>.</p></div>
-  <div class="card"><h3>Little OLED</h3><p>New, not yet on a real display: a £3 I2C OLED on GPIO8/9 shows the temperatures, a progress bar, and HOMING or LOADING as it happens. <a href="OLED.md">OLED guide</a>.</p></div>
-  <div class="card"><h3>Micro SD card</h3><p>Works on hardware: a bare SD module soldered to the ESP32's back on GPIO10-13 mounts, lists and takes uploads from a phone. Printing from it is next.</p></div>
-  <div class="card"><h3>Deckhand, Captain, Skipper</h3><p>Three builds by board memory, picked by the Flasher in one click. Bigger boards get WiFi firmware updates and more look-ahead; every build gets slicer uploads, home WiFi, thumbnails, print history and crash reports. Built, not yet on hardware.</p></div>
+  <div class="card"><h3>Benchmarks on the real board</h3><p>A 12-layer print path (about a million steps) through the whole motion pipeline with the drivers off: 121.8 s, the printer task busy about 44 % of one core, most of it waiting for the board. An integer-maths test build runs input shaping in about half the processor time. <a href="BENCHMARK.md">Benchmark guide</a>.</p></div>
+  <div class="card"><h3>Tuning</h3><p>Built, timed on the ESP32, not yet used on a moving printer: Klipper's input shaping and pressure advance, an accelerometer it finds on its own, bed mesh with a coloured heightmap and screw tilt. <a href="TUNING.md">Tuning guide</a>.</p></div>
+  <div class="card"><h3>Buttons on the case</h3><p>Works on hardware (Preheat and Home through the Tina 2's case): bolts through the case as touch pads (or plain switches) for preheat, home, unload and a held E-stop. <a href="BUTTONS.md">Buttons guide</a>.</p></div>
+  <div class="card"><h3>Little OLED</h3><p>Works on a real display: a £3 I2C OLED on GPIO8/9 shows the temperatures, a progress bar, and HOMING or LOADING as it happens. <a href="OLED.md">OLED guide</a>.</p></div>
+  <div class="card"><h3>Micro SD card</h3><p>Works on hardware: a bare SD module soldered to the ESP32's back on GPIO10-13 mounts, lists and takes uploads from a phone. Running a print from it is next.</p></div>
+  <div class="card"><h3>Deckhand, Captain, Skipper</h3><p>Three builds by board memory, picked by the Flasher in one click. Bigger boards get WiFi firmware updates and more look-ahead; every build gets slicer uploads, home WiFi, thumbnails, print history and crash reports. CAPTAIN runs on the ESP32-S3-Zero with its 2 MB PSRAM; WiFi updates work.</p></div>
   <div class="card"><h3>Flasher window</h3><p>Slave (printer board) and Master (ESP32-S3 only) tabs, firmware for every listed board shipped ready to flash. The SKR Pico and ESP32-S3 paths are used on real hardware; the other boards are compile-only.</p></div>
 </div>
 <img class="shot" src="images/flasher-slave.webp" width="1000" height="760" alt="The Flasher window, Slave tab, with the BTT SKR Pico (UART) firmware selected, marked hardware-tested">
 <p class="lead">The Flasher, Slave tab, with the SKR Pico firmware that runs in the Tina 2.</p>
 
 <h2>Still to do</h2>
-<p class="note">Tuning (stallGuard, motor current, speeds, rotation_distance), proper long-run testing, a first real print, the remaining fans, and SD-card support for big G-code files. The whole story, every mistake included, is in the paper <a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/paper/A_FRANKENSTEIN_EXPERIENCE.md">A Frankenstein Experience</a> (<a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/paper/A_FRANKENSTEIN_EXPERIENCE.pdf">PDF</a>). Real-hardware results, dated: <a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/HARDWARE_LOG.md">hardware log</a>.</p>
+<p class="note">A first real printed part (on the QIDI X-Smart 3), the tuning features on a moving printer, sending without waiting for every acknowledgement, the integer input shaper in every build, the remaining fans, and proper long-run testing. The whole story, every mistake included, is in the paper <a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/paper/A_FRANKENSTEIN_EXPERIENCE.md">A Frankenstein Experience</a> (<a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/paper/A_FRANKENSTEIN_EXPERIENCE.pdf">PDF</a>). Real-hardware results, dated: <a href="https://github.com/The-Dorkknight/esp-printhost/blob/main/docs/HARDWARE_LOG.md">hardware log</a>.</p>
 
 <h2>Try it</h2>
 <pre><code>git clone https://github.com/The-Dorkknight/esp-printhost

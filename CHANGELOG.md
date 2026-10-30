@@ -16,6 +16,12 @@ First public snapshot. **Proof of concept; many features may be broken.** Real-h
 ### Works on real hardware (cont.)
 - Temperature reading from two thermistors on the SKR Pico (hotend ~24 C, bed ~21 C).
 
+### Changed (2026-10-29, night): documentation brought up to date
+- **README**: status, the parts table, Known limitations and the Roadmap rewritten for what has now run on hardware (full homing, a print file run in mid-air, WiFi updates, OLED, touch buttons, both benchmarks). The old limitations ("only the link and the LED have run on hardware", a placeholder config CRC, "ESP-IDF build untested") were long out of date.
+- **Project page** (`docs/index.html`): the same.
+- **The paper, A Frankenstein Experience, version 1.2**: plain Klipper on the board, the PSRAM found, homing and the mid-air print, six new mistakes (18-23), a new section 6.1 with the benchmark measurements, and an updated status. PDF rebuilt.
+- **Smaller files**: the paper's PDF went from 8.3 MB to under 1 MB. The film strip's sprocket holes are now drawn as vector shapes (Chromium had turned the repeating background into a full-page picture on every page), the chip diagram is the SVG instead of a 713 KB PNG (removed), and the photos are smaller JPEGs. The screenshots and photos in docs/images were recompressed too (about 375 KB less).
+
 ### Fixed (2026-10-29): benchmark result cut off; build time (the benchmark itself now confirmed on hardware)
 - **The benchmark ran to the end on the Tina 2** with the 2026-10-28 evening INT32/64 test build, twice (once flashed over WiFi, once over USB: the same binary, e171ff5c): 121.7 s and 121.8 s, printer task busy 43.8 % and 44.9 % of one core. The 1024-command move queue fixed the "too late" refusals.
 - **The result line was cut off** after "without sending):", so the per-stage figures and the sends were missing: the important-events log kept lines of up to 480 characters. The result is now five short lines (`benchmark ...`, `benchmark firmware:`, `benchmark work:`, `benchmark processor:`, `benchmark sends:`), and the log keeps lines of up to 1 KB. A test checks that every line fits.

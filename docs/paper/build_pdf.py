@@ -21,8 +21,8 @@ html,body{margin:0;padding:0;background:transparent;-webkit-print-color-adjust:e
 /* the paper and the film strip, repeated on every printed page */
 .bg{position:fixed;left:0;top:0;width:210mm;height:297mm;background:#e9e6dc;z-index:-2}
 .strip{position:fixed;left:0;width:210mm;height:7mm;z-index:-1;background-color:#141414;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='50' height='70'><rect x='14' y='22' width='22' height='26' rx='5' fill='%23e9e6dc'/></svg>");
-  background-size:5mm 7mm;background-repeat:repeat-x}
+}
+.strip svg{display:block;width:210mm;height:7mm}
 .strip.t{top:0}.strip.b{bottom:0}
 .edge{position:fixed;top:0;height:297mm;width:2.2mm;background:#141414;z-index:-1}.edge.l{left:7mm}.edge.r{right:7mm}
 body{font:10.6pt/1.5 "DejaVu Serif",Georgia,serif;color:#141414}
@@ -59,12 +59,18 @@ hr{border:none;border-top:3px solid #141414}
 strong{font-weight:700}
 """
 
+# The film strip's sprocket holes as vector shapes (2026-10-29). They used to be a repeating CSS
+# background image, which Chromium turned into a full-page bitmap on every page: 3.4 MB of the 8.3 MB PDF.
+HOLES = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 70' preserveAspectRatio='none'>"
+         + "".join("<rect x='%d' y='22' width='22' height='26' rx='5' fill='#e9e6dc'/>" % (14 + 50 * k) for k in range(42))
+         + "</svg>")
+
 def main():
     frag = subprocess.run(["pandoc", "-f", "markdown+lists_without_preceding_blankline+implicit_figures",
                            "-t", "html5", MD], capture_output=True, text=True, check=True).stdout
     html = ("<!doctype html><html><head><meta charset='utf-8'><title>A Frankenstein Experience</title>"
-            "<style>" + CSS + "</style></head><body><div class='bg'></div><div class='strip t'></div>"
-            "<div class='strip b'></div><div class='edge l'></div><div class='edge r'></div>"
+            "<style>" + CSS + "</style></head><body><div class='bg'></div><div class='strip t'>" + HOLES + "</div>"
+            "<div class='strip b'>" + HOLES + "</div><div class='edge l'></div><div class='edge r'></div>"
             "<table class='page'><thead><tr><td></td></tr></thead><tfoot><tr><td></td></tr></tfoot>"
             "<tbody><tr><td>" + frag + "</td></tr></tbody></table></body></html>")
     tmp = os.path.join(HERE, ".paper.html")

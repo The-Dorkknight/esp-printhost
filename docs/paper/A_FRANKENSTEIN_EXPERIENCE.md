@@ -4,9 +4,9 @@
 
 ## How cheap and lean can a Klipper brain get?
 
-**Field notes from Skipper Flipper: an ESP32-S3 microcontroller doing the Klipper host's job for a 3D printer board running (almost) stock Klipper firmware. Including every embarrassing mistake.**
+**Field notes from Skipper Flipper: an ESP32-S3 microcontroller doing the Klipper host's job for a 3D printer board running stock Klipper firmware. Including every embarrassing mistake.**
 
-Matthew Armstrong ([The-Dorkknight](https://github.com/The-Dorkknight)) · Version 1.1 · 14 October 2026 · Text CC BY-SA 4.0 · Code GPL-3.0
+Matthew Armstrong ([The-Dorkknight](https://github.com/The-Dorkknight)) · Version 1.2 · 29 October 2026 · Text CC BY-SA 4.0 · Code GPL-3.0
 
 *Status: mostly working, needs tuning and proper testing. A hobbyist's field notebook, not peer-reviewed research. What ran on real hardware and what only ran in simulation is listed in section 12, and dated in the [hardware log](../HARDWARE_LOG.md).*
 
@@ -19,9 +19,11 @@ Klipper is the 3D-printer firmware everybody wants and nobody's old printer can 
 I wanted to know how small that thinking computer could get. The answer so far is **an ESP32-S3**:
 - a microcontroller board that costs a few pounds;
 - 512 KB of on-chip RAM, of which about 160 KB is free once WiFi is running;
-- 2 MB of flash, of which about 1.2 MB is used.
+- the smallest build fits in 2 MB of flash; the board I now use has 4 MB of flash and 2 MB of extra RAM (PSRAM), which the bigger build uses.
 
-It talks to a BTT SKR Pico running Klipper v0.13.0's own board firmware over four jumper wires, and serves the whole user interface from its own WiFi hotspot to a phone.
+It talks to a BTT SKR Pico running plain Klipper v0.13.0 board firmware over four jumper wires, and serves the whole user interface from its own WiFi hotspot to a phone.
+
+**New in version 1.2:** it now homes all three axes on the real printer and has run a whole print file, though in mid-air (section 5). A benchmark that pushes about a million steps through the whole pipeline to the real board shows the ESP32 doing about 14 % of one core of real work, and an integer-maths build runs input shaping in about half the processor time (section 6).
 
 Along the way I powered a 12 V heater from 20 V, and my AI co-pilot asked a chip with no spare RAM for 45 KB in one lump. Between us we also nearly cooked a circuit board through its data pin. All of it is written down here, because the dead ends are the useful part.
 
@@ -53,7 +55,7 @@ Either way, it's a lot of engineering bent sideways in pursuit of the elusive ef
 
 I'm not judging anyone's licensing: read the sources and make your own mind up.
 
-![Figure 1. The potato chip: what's inside an Allwinner R528-S3, and what the Centauri Carbon uses each part for. Blocks from Allwinner's R528 brief; uses from OpenCentauri's notes. The DAC story is marked unverified.](images/r528_block.png)
+![Figure 1. The potato chip: what's inside an Allwinner R528-S3, and what the Centauri Carbon uses each part for. Blocks from Allwinner's R528 brief; uses from OpenCentauri's notes. The DAC story is marked unverified.](images/r528_block.svg)
 
 What caught my engineering brain was this. Klipper normally runs its host in Python on a Linux computer with hundreds of megabytes to spare. Elegoo ran it, compiled and slimmed down, on a potato chip, with the board firmware squeezed onto an audio processor. So the obvious next question is: **how far down can you go?**
 
@@ -61,7 +63,7 @@ What is the cheapest, leanest Frankenstein that still behaves like Klipper? Dang
 
 ### 1.3 The rules I set
 
-1. **Don't fork Klipper's brain, borrow its spine.** The board keeps running Klipper's own firmware, so every board Klipper supports could in principle work. In practice it runs a light fork (section 3.4), but the parts that move and heat things are untouched.
+1. **Don't fork Klipper's brain, borrow its spine.** The board keeps running Klipper's own firmware, so every board Klipper supports could in principle work. For a while it ran a light fork; since 25 October it runs plain, unmodified Klipper v0.13.0 (section 3.4).
 2. **The host must be a microcontroller,** not a Linux computer: an ESP32-S3, the cheapest thing I could find with WiFi and enough memory to try.
 3. **Everything happens in a phone browser.** There's no app to install and no PC needed once it's flashed.
 4. **The setup tool must run on a 7th-generation Core i3** and set itself up in one step. If a twenty-quid printer needs a gaming PC to configure, the joke is on me.
@@ -78,16 +80,18 @@ Klipper's board firmware is deliberately simple. It queues timed steps, switches
 | Turning `printer.cfg` into board commands (`mcu.py`, the `extras/`) | `build_board_plan`, with the same config CRC Klipper uses | real hardware |
 | Heater control (`heaters.py`): PID, the watermark "bang-bang" control, `verify_heater`, PID tuning | Ported from Klipper's code, including its 5 s heater watchdog | real hardware |
 | TMC2209 over the driver UART (`tmc2209.py`, `tmc_uart.py`) | Register values checked bit for bit against Klipper's own code | real hardware: all drivers answer |
-| Look-ahead planner and step generation (`toolhead.py`, `chelper`) | The project's planner, plus a step compressor that fits Klipper's `queue_step` within 25 µs | **simulation**: 3,000 accelerating steps become 30 commands, worst error 290 of 300 allowed ticks |
-| Homing, probing, sensorless homing (`homing.py`, `tmc.py`) | Same board commands, same sample timing, same register juggling | stallGuard triggers on real hardware; full homing in **simulation** |
-| G-code files (`virtual_sdcard.py`) | The browser compresses the file, the ESP32 stores it in 576 KB of flash and unpacks it line by line while printing | **simulation** (the unpacker was checked byte for byte against the real compressor) |
+| Look-ahead planner and step generation (`toolhead.py`, `chelper`) | The project's planner, plus a step compressor that fits Klipper's `queue_step` within 25 µs | real hardware: homing, a whole print file (in mid-air) and a million-step benchmark; the accuracy is checked in simulation |
+| Homing, probing, sensorless homing (`homing.py`, `tmc.py`) | Same board commands, same sample timing, same register juggling | real hardware: full homing of X, Y and Z (27 October); probing in **simulation** |
+| G-code files (`virtual_sdcard.py`) | A micro SD card soldered to the ESP32, or (without a card) a compressed file in 576 KB of flash | real hardware: a whole file run end to end |
+| Input shaping and pressure advance (`input_shaper.py`, `extruder.py`, `chelper`) | Ported on the bigger builds, on a 2 ms grid; an integer version for the test build | maths timed on the ESP32; **not yet on a moving printer** |
 | The web interface (Moonraker + Mainsail/Fluidd) | Text-only pages served by the ESP32 itself | real hardware |
 
 What I left out is as important as what went in:
-- **Not ported:** input shaping, bed meshes, pressure advance, macros, arcs (G2/G3) and firmware retraction.
-- **Trimmed from the interface:** no graphs, no G-code preview, no mesh view. Temperatures are coloured text boxes that scroll up while heating and down while cooling, because a graph costs flash and a coloured number doesn't.
+- **Version 1.1 left out** input shaping, bed meshes, pressure advance, arcs (G2/G3) and firmware retraction. They have since been ported on the bigger builds (CAPTAIN and SKIPPER), but none of them has moved a real printer yet.
+- **Still left out:** Klipper's Jinja macro language. Plain macros work; a macro with `{...}` templates is refused with a clear message rather than half-understood.
+- **Trimmed from the interface:** no graphs. Temperatures are coloured text boxes that scroll up while heating and down while cooling, because a graph costs flash and a coloured number doesn't.
 
-The whole ESP32-S3 image is **1,213,104 bytes**, in a 1,441,792-byte app slot (16 % free). The portable C++ core that does the host's job is about 7,400 lines, and the same code runs on a PC for testing.
+There are now three builds, by how much memory the ESP32 board has. The smallest (DECKHAND) is **1,436,112 bytes** in a 1,441,792-byte app slot: about 6 KB free, which is tight. The one in the Tina 2 (CAPTAIN) is 1,690,064 bytes with about 14 KB free. The portable C++ core that does the host's job is now about 12,500 lines, and the same code runs on a PC for testing.
 
 ## 3. The Frankenstein, part by part
 
@@ -131,9 +135,9 @@ Two checks are new:
 
 ### 3.4 "Is the board firmware stock?" Almost.
 
-The SKR Pico runs Klipper v0.13.0 (commit `61c0c8d`), with three extra source files for an experimental "segment queue" and one build option to switch them on. That's why the board reports itself as `v0.13.0-0-g61c0c8d-dirty`.
+Version 1.1 said "almost". The SKR Pico then ran Klipper v0.13.0 with three extra source files for an experimental "segment queue", which is why it reported itself as `v0.13.0-0-g61c0c8d-dirty`. The ESP32 never used it: it drives the motors with Klipper's own `queue_step` command.
 
-**Nothing else in Klipper is changed.** The ESP32 never uses the segment queue: it drives the motors with Klipper's own `queue_step` command. So everything that heats, moves or reads a sensor runs Klipper's unmodified code. I'm mentioning it because "check whether it's stock or our fork" is the first question to ask whenever something misbehaves.
+**Since 25 October the answer is yes.** The segment queue was removed ([why](../research/segq-retired.md)), and the board runs plain, unmodified Klipper v0.13.0. The ESP32's firmware is the only bespoke part of the whole system. That matters, because "is it stock or our fork?" is the first question to ask whenever something misbehaves.
 
 ### 3.5 Why everything is a boat
 
@@ -178,7 +182,7 @@ The fix, if you insist on doing this: in `printer.cfg`, set `max_power` to (rate
 
 The backtrace, decoded against the exact firmware image, pointed straight at it. The planner now looks 32 moves ahead (about 6 KB), and memory is checked first so a shortage gives an error message instead of a crash.
 
-The board's listing advertises 2 MB of PSRAM that the firmware has never switched on. I haven't checked whether that RAM is really there.
+The board's listing advertised 2 MB of PSRAM that the firmware had never switched on. It is really there: the bigger build found it on 20 October and now uses it for 256 moves of look-ahead.
 
 **12. Feeding a switched-off board through its data pin.** This is the subtlest one. When the ESP32 runs on its own USB power and you switch the printer board off, the ESP32's TX wire is still sitting at 3.3 V. A little current leaks into the dead board's RX pin and half-powers it. When its own supply comes back, the board doesn't restart properly: it answers nothing and holds its TX line low, so all the ESP32 hears is a stream of zeros.
 
@@ -197,38 +201,71 @@ The board's listing advertises 2 MB of PSRAM that the firmware has never switche
 
 **17. Found while making the pictures for this paper.** To get a nice screenshot I started a stallGuard test and then pressed Home X while the test was still running the same motor. Both tried to drive the stepper at once, and the simulated board shut down with "Can't reset time when stepper active". Klipper's own board firmware is right to refuse, and nothing in the ESP32 had stopped me doing it. Homing, moves and jogging are now refused while a motor test runs. The paper found a bug before the printer did.
 
+**18. Doing all the homework before handing any in.** The first real "Home all" shut the board down with "Timer too close". The Z homing move is 123 mm at 4 mm/s: 49,200 steps. The ESP32 worked out every one of them before sending the first, which took about 0.4 s, and the move had been given a 0.3 s head start. The homing move is now sent like any other: the first 0.6 s at once, the rest while it runs.
+
+**19. The web page that stopped the motors.** "Timer too close" came back on 27 October, both times while the Printer page was loading a G-code preview over WiFi. The task that talks to the printer board shared a processor core with the web server, at a lower priority, so a busy page could hold it off until planned steps arrived late. It now has the second core to itself. The same evening, full homing worked for the first time.
+
+**20. The print in mid-air.** That same evening a whole print file ran from start to finish, and the nozzle never touched the bed. The Tina 2's Z axis has a flexible coupling and a gantry that pulls unevenly, so it has no sharp stop to measure a Z offset from, and its tiny Y motor overheats even at 0.3 A. It's retired as the test bench. Next is a QIDI X-Smart 3, a CoreXY whose own toolhead board is dead, with the SKR Pico in its place.
+
+**21. 200 is not 1,024.** A new benchmark (section 6) stopped six times on the Tina 2 with a move "refused as too late". The ESP32 limits how many commands it puts in the board's queue, and it read the queue size from the board before configuring it, when Klipper reports 0. So it fell back to a cautious 200 instead of the SKR Pico's 1,024, and fine detail couldn't be queued far enough ahead. It now reads the size again after configuring. The benchmark has run to the end every time since. The useful part: the run only revealed the cause after we added a message that said how full the queue was ("board move queue 0 of 200").
+
+**22. The image at the wrong address.** The Flasher put a firmware image meant for WiFi updates at the address for a full image over USB, and the ESP32 didn't boot. Re-flashing the full image fixed it. The Flasher now reads the file itself to tell what kind of image it is, sets the address, and refuses a wrong one.
+
+**23. A benchmark that compared nothing.** The integer-maths test build and the standard build gave exactly the same input-shaping figures in the motion benchmark, to two decimal places. That's because the benchmark had its own copy of the motion pipeline, which always used the standard shaper. Once fixed, the difference showed up straight away (section 6). If two things you're comparing come out identical, check that you're actually measuring both.
+
 ## 5. What actually works (and what doesn't yet)
 
 | | Real hardware | Simulation only | Not working / unknown |
 |---|---|---|---|
-| Link | UART link, identify, clock sync, configuration, automatic reset, the console from a phone | Power-cycle recovery (9 tests) | |
+| Link | UART link, identify, clock sync, configuration, automatic reset, recovery from board power cycles, the console from a phone, firmware updates over WiFi | | |
 | Heat | Thermistors, heater PWM, PID tune ("works quite well"), the heater test, safety shutdowns, error display | | |
-| Motion | Motor test, TMC2209 set-up, stallGuard triggering | Moves, look-ahead, full homing, sensorless homing, probing | Tuning: stallGuard threshold, motor current, speeds, `rotation_distance` for this printer |
-| Printing | Uploading a file | Printing a file (G-code read from flash, moves, temperatures, fans) | Never printed on real hardware yet |
-| Fans | Hotend fan confirmed | Fan commands and tests | Part-cooling fan and third fan output not confirmed yet: possibly a broken wire, will update when tested |
+| Motion | Motor test, TMC2209 set-up, stallGuard, **full homing of X, Y and Z**, a whole print file's moves (in mid-air), the benchmarks | Probing | Input shaping, pressure advance and bed mesh on a moving printer |
+| Printing | Uploading to flash or the SD card, **running a whole file** | Pause, resume, cancel | **No real part printed yet** (no usable Z offset on the Tina 2) |
+| Extras | The OLED, touch buttons through the case, the important-events log | Slicer uploads, home WiFi | |
+| Fans | Hotend fan confirmed | Fan commands and tests | Part-cooling fan and third fan output not confirmed yet: possibly a broken wire |
 
 ## 6. So how cheap and lean can it get?
 
 The honest answer, at this point:
 - **The cheapest Klipper-ish brain is a few-pound ESP32-S3 bolted onto the board the printer already has,** as long as that board's processor can run Klipper's firmware. The SKR Pico here was a stand-in for exactly that.
-- **The leanest working host I've managed** fits in 1.2 MB of flash and runs in the RAM left over after WiFi, which on this board is about 160 KB free.
+- **The leanest working host I've managed** fits in 1.4 MB of flash and runs in the RAM left over after WiFi, which is about 160 KB free.
 - **For scale,** the potato chip in the Centauri Carbon has 128 MB of memory, from section 1.2's sources. That isn't a criticism of Elegoo. Their printer does a great deal more than this one, and they had a whole engineering team. It is just a sense of how much slack there is in "Klipper needs a computer".
 
 **The cost of going this lean:**
-- no input shaping or pressure advance (yet);
+- input shaping, pressure advance and bed mesh only on the bigger builds, and not yet proven on a moving printer;
 - a text-only interface;
-- G-code files limited to what fits in 576 KB of flash after compression (the upload page estimates about five times compression);
+- big G-code files need the SD card (without one, 576 KB of compressed flash);
 - a design where the host and the board must agree on every byte, because there's no operating system to hide the mistakes behind.
 
-## 7. Why I'm stopping here
+### 6.1 Measured on the real chip
 
-Now that I've defeated the main engineering challenge, I've lost interest. Proving it can be done was the catnip; tuning stallGuard thresholds is not.
+Version 1.1 could only guess at whether the ESP32 had the processing power. Now there's a benchmark (`SF_BENCH`). It runs a 12-layer print-like file (9,617 lines, about a million steps, including a run of 300 tiny 0.25 mm moves) through the whole motion pipeline and the real SKR Pico, with the stepper drivers and heaters switched off. Every stage is timed with the processor's cycle counter. On the Tina 2, 29 October:
 
-Before the Tina 2 moves on, I'll release two more versions:
-- **The fully tuned version,** with real numbers in the Tina 2 preset instead of guesses;
-- **An SD-card version** for big G-code files, because 576 KB of compressed G-code is plenty for a calibration cube and not much more.
+| Stage | Share of one core |
+|---|---|
+| Look-ahead planner | 2.2 % |
+| Step times | 0.5 % (0.1 % with integer maths) |
+| Compressing steps into Klipper's `queue_step` | 7.4 % |
+| Sending, including waiting for the board to acknowledge | 29.7 % |
+| Everything else (G-code, file, heaters) | 4.6 % |
+| **Total** | **about 44 %** |
 
-After that the printer goes the way of all my twenty-quid printers: offloaded to someone who'll actually use it. I'll go back to eBay for the next one.
+The run takes 121.8 s either way, and the board's 1,024-command queue never gets more than about 384 deep. Leave out the waiting and the ESP32 is doing about **14 % of one of its two cores**. So the processing power is there: the biggest single cost is the ESP32 sitting idle while each batch of commands is acknowledged. Klipper's host keeps sending and collects acknowledgements as they come in, and copying that is the next speed work.
+
+The Tina 2's `printer.cfg` has no input shaper, so a second benchmark times the expensive maths on its own:
+
+| Print path, input shaping + pressure advance | Standard (double) | Integer test build |
+|---|---|---|
+| 100 mm/s | 22.1 µs per step, 19 % of one core | 11.6 µs per step, 10 % |
+| 200 mm/s | 15.1 µs per step, 23 % | 9.1 µs per step, 14 % |
+
+The ESP32-S3 has no hardware for 64-bit floating point, so `double` maths runs in software. Doing input shaping in whole numbers (times in microseconds, positions in 1/65,536 of a step) makes the shaping work itself about **3.7 times faster**, and on the PC it stays within one step of the `double` version everywhere. It hasn't driven a real motor yet.
+
+## 7. Why I'm stopping here (version 1.1), and why I didn't
+
+Version 1.1 said: now that I've defeated the main engineering challenge, I've lost interest. Proving it can be done was the catnip; tuning stallGuard thresholds is not. I promised two more versions, a tuned one and an SD-card one, and then the Tina 2 would go the way of all my twenty-quid printers.
+
+The SD-card version happened. The tuned one ran into the Tina 2's floppy Z axis (mistake 20). In between, the question changed from "can it be done?" to "how fast can it go?", which turned out to be catnip too. The Tina 2 is retired as the test bench. The QIDI X-Smart 3 takes over, and the first real printed part is the next milestone.
 
 My employability, for the record, has gone up by roughly another 3.14159 %. That's a very efficient use of an evening, with excellent synergy.
 
@@ -247,7 +284,7 @@ Frankenstein's monster was stitched together from other people's parts. So is th
 If you have a junk printer and a spare ESP32-S3, have a go:
 - **Post your results,** good or bad, as an issue or discussion on the repository. Photos of things going wrong are especially welcome. Failure is data.
 - **Add your board.** Klipper's firmware runs on dozens of chips. The Flasher already ships compile-only builds for a Creality 4.2.x, an Ender 3 1.1.x, RAMPS on a Mega2560 and generic RP2040 boards. None has been tried on real hardware yet: each one needs someone with the board and a free evening.
-- **Fork it.** Port pressure advance, add the SD card, make the pages nicer than my text boxes.
+- **Fork it.** Try input shaping on a printer that moves, make sending work without waiting for every acknowledgement, make the pages nicer than my text boxes.
 
 Everyone who contributes gets credited in the next version.
 
@@ -263,7 +300,7 @@ Everyone who contributes gets credited in the next version.
 - the code, the simulated printer board and the tests;
 - the literature digging;
 - the first draft of this write-up;
-- its own share of the mistakes (numbers 3, 7, 9, 10, 11, 13, 14, 15 and 17, for the record).
+- its own share of the mistakes (numbers 3, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19, 21, 22 and 23, for the record).
 
 Every real-hardware result in this paper is mine, measured on my bench, and dated in the [hardware log](../HARDWARE_LOG.md). Every simulated result says so.
 
@@ -285,12 +322,14 @@ Every real-hardware result in this paper is mine, measured on my bench, and date
 - This project:
   - [HARDWARE_LOG.md](../HARDWARE_LOG.md)
   - [research/klipper-sources.md](../research/klipper-sources.md)
+  - [research/klipper-grade-performance.md](../research/klipper-grade-performance.md)
+  - [BENCHMARK.md](../BENCHMARK.md)
   - [TINA2_INSTALL.md](../TINA2_INSTALL.md)
   - [WIRING_SKR_PICO.md](../WIRING_SKR_PICO.md)
 
 ## 11. How to cite
 
-Armstrong, M. (2026). *A Frankenstein Experience: how cheap and lean can a Klipper brain get? Field notes from Skipper Flipper, including every embarrassing mistake.* Version 1.1, 14 October 2026. https://github.com/The-Dorkknight/esp-printhost
+Armstrong, M. (2026). *A Frankenstein Experience: how cheap and lean can a Klipper brain get? Field notes from Skipper Flipper, including every embarrassing mistake.* Version 1.2, 29 October 2026. https://github.com/The-Dorkknight/esp-printhost
 
 Text and figures: [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Code: GPL-3.0, like Klipper.
 
@@ -298,10 +337,10 @@ Text and figures: [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/
 
 <div class="small">
 
-**What ran where (14 October 2026):**
-- **On real hardware:** the link, clock sync and board configuration; temperatures, heating, PID tuning and the safety shutdowns; motors and TMC2209 drivers; stallGuard triggering.
-- **Only in simulation:** moving the toolhead, full homing and probing, and printing a file. They are tested against a simulated printer board and in unit tests, never on a real printer yet.
-- **Not confirmed yet:** the part-cooling fan and the third fan output (the hotend fan works; possibly a broken wire, will update when tested), the ideal tuning values, and the cause of one early board lock-up.
+**What ran where (29 October 2026):**
+- **On real hardware:** the link, clock sync and board configuration; temperatures, heating, PID tuning and the safety shutdowns; motors, TMC2209 drivers and stallGuard; full homing of X, Y and Z; a whole print file (in mid-air); the SD card, OLED and touch buttons; both benchmarks, with the drivers off.
+- **Only in simulation:** probing; pause, resume and cancel. Input shaping, pressure advance and bed mesh have been timed on the ESP32 but have not moved a real printer.
+- **Not confirmed yet:** a real printed part; the part-cooling fan and the third fan output (the hotend fan works; possibly a broken wire); the integer maths driving real motors; and the cause of one early board lock-up.
 
 **Disclaimers:**
 
