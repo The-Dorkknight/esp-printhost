@@ -193,6 +193,6 @@ Copyright (C) 2026 Matthew Armstrong ([The-Dorkknight](https://github.com/The-Do
 
 **[A Frankenstein Experience: How cheap and lean can a Klipper brain get?](docs/paper/A_FRANKENSTEIN_EXPERIENCE.md)** (version 1.2) · [PDF](docs/paper/A_FRANKENSTEIN_EXPERIENCE.pdf)
 
-The paper's text and figures: [CC BY-SA 4.0](docs/paper/LICENSE.md)
+DOI [10.5281/zenodo.23866772](https://doi.org/10.5281/zenodo.23866772) · The paper's text and figures: [CC BY-SA 4.0](docs/paper/LICENSE.md)
 
-**How to cite:** Unknown (n.d.). *A Frankenstein Experience: How cheap and lean can a Klipper brain get?.* Version 1.2.
+**How to cite:** Unknown (n.d.). *A Frankenstein Experience: How cheap and lean can a Klipper brain get?.* Version 1.2. https://doi.org/10.5281/zenodo.23866772
