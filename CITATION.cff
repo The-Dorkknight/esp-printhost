@@ -1,0 +1,14 @@
+# Made by Repo Pegboard. GitHub reads this file to show "Cite this repository".
+cff-version: 1.2.0
+message: "If you use this work, please cite the paper below."
+title: "esp-printhost"
+authors:
+  - name: "Unknown"
+repository-code: "https://github.com/The-Dorkknight/esp-printhost"
+preferred-citation:
+  type: report
+  title: "A Frankenstein Experience: How cheap and lean can a Klipper brain get?"
+  authors:
+    - name: "Unknown"
+  version: "1.2"
+  license: CC-BY-SA-4.0

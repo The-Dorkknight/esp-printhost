@@ -188,3 +188,11 @@ The look is a 1928 black-and-white cartoon (visuals only).
 Copyright (C) 2026 Matthew Armstrong ([The-Dorkknight](https://github.com/The-Dorkknight)).
 
 [docs/HARDWARE_LOG.md](docs/HARDWARE_LOG.md) (everything tested on real hardware) · [docs/WIRING_SKR_PICO.md](docs/WIRING_SKR_PICO.md) (ESP32-S3 to SKR Pico wiring) · [docs/TEST_BENCH.md](docs/TEST_BENCH.md) (test page and heater safety) · [docs/TUNING.md](docs/TUNING.md) (input shaping, pressure advance, bed mesh, screw tilt) · [docs/BUTTONS.md](docs/BUTTONS.md) (touch pads / buttons on the case) · [docs/TINA2_INSTALL.md](docs/TINA2_INSTALL.md) (WEEDO Tina 2 installation) · [docs/configs/qidi-xsmart3-skr-pico.md](docs/configs/qidi-xsmart3-skr-pico.md) (QIDI X-Smart 3 test bench) · [docs/CHAMBER_SENSOR.md](docs/CHAMBER_SENSOR.md) (chamber thermistor) · [docs/BENCHMARK.md](docs/BENCHMARK.md) (benchmark, integer test build, important events) · [docs/research/klipper-sources.md](docs/research/klipper-sources.md) (research notes; [how fast can it go](docs/research/klipper-grade-performance.md)) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [THIRD_PARTY.md](THIRD_PARTY.md) · [CHANGELOG.md](CHANGELOG.md)
+
+## Research paper
+
+**[A Frankenstein Experience: How cheap and lean can a Klipper brain get?](docs/paper/A_FRANKENSTEIN_EXPERIENCE.md)** (version 1.2) · [PDF](docs/paper/A_FRANKENSTEIN_EXPERIENCE.pdf)
+
+The paper's text and figures: [CC BY-SA 4.0](docs/paper/LICENSE.md)
+
+**How to cite:** Unknown (n.d.). *A Frankenstein Experience: How cheap and lean can a Klipper brain get?.* Version 1.2.
