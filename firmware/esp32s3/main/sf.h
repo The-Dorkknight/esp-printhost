@@ -114,6 +114,9 @@ bool sf_printer_cfg_set(const char *text);
 void sf_printer_cfg_report(char *out, size_t n);
 // Run one console command (e.g. "SET_LED LED=board_led RED=1") on the link task; waits for the reply.
 bool sf_console(const char *line, char *reply, size_t n, int timeout_ms);
+// Pasta Inspector dongle (Moonraker websocket, moonraker_ws.cpp). Status/object JSON are malloc'd copies (free()).
+void sf_moon_want(int on);
+char *sf_moon_status_dup(long have_rev);   // {"eventtime","rev","status"}; -1 = with object list
 // The default printer.cfg (BTT SKR Pico), for the "load default" button. Returns the length.
 size_t sf_printer_cfg_default(char *out, size_t n);
 size_t sf_printer_cfg_default_ender3(char *out, size_t n);
@@ -234,6 +237,7 @@ bool sf_accel_record(int mode, int axis, char *err, size_t errn);
 void sf_accel_init(const sf_settings_t *s, void *httpd);
 void sf_tune_register(void *httpd);   // GET /tune (web_pro.cpp)
 void sf_pro_register(void *httpd);   // GET /bench ...
+void sf_moonraker_register(void *httpd);   // /websocket (Pasta Inspector dongle)
 
 // ---- home WiFi (main.c)
 const char *sf_ap_ssid(void);   // "SkipperFlipper-XXXX"

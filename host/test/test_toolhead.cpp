@@ -13,6 +13,7 @@
 #include "ph/toolhead.h"
 #include "skr_pico_dict.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -1039,6 +1040,80 @@ static void test_pro_features() {
         NEAR(pos / se.steps_per_mm(), 4.0, 0.02);
         CHECK(m->command("GET_RETRACTION", mr.rig.now).find("RETRACT_LENGTH=1.500") != std::string::npos);
     }
+    // ---- Moonraker-shaped state for a spaghetti detector (Pasta Inspector dongle, 2026-10-31):
+    //      outlines, heights, exclusion, live head position, pause, filament used, RESPOND
+    {
+        MotionRig mr;
+        BoardPlan plan;
+        std::unique_ptr<Machine> m;
+        homed_machine(base, mr, plan, m);
+        unsigned rev0 = m->objects_rev();
+        CHECK(m->moonraker_status_json(mr.rig.now).find("\"state\":\"standby\"") != std::string::npos);
+        mr.rig.file = {"G90", "M82", "G92 E0",
+                       "EXCLUDE_OBJECT_DEFINE NAME=cube_a CENTER=30,30 POLYGON=[[20,20],[40,20],[40,40],[20,40]] PI_Z0=0 PI_Z1=10.5",
+                       "EXCLUDE_OBJECT_DEFINE NAME=cube_b CENTER=60,60",
+                       "EXCLUDE_OBJECT_START NAME=cube_a", "G1 X20 Y20 F6000", "G1 X80 Y20 E6 F600",
+                       "EXCLUDE_OBJECT_END"};
+        CHECK(m->command("SDCARD_PRINT_FILE", mr.rig.now).rfind("ok printing", 0) == 0);
+        CHECK(m->objects_rev() > rev0);   // a new print always looks new to a watcher
+        std::vector<double> xs;
+        bool saw_cur = false, saw_live = false;
+        mr.run(*m, 60, [&]() {
+            double lp[4];
+            if (m->toolhead()->live_position(mr.rig.now, lp)) xs.push_back(lp[0]);
+            std::string st = m->moonraker_status_json(mr.rig.now);
+            saw_cur |= st.find("\"current_object\":\"CUBE_A\"") != std::string::npos;
+            saw_live |= st.find("\"live_position\":[") != std::string::npos && st.find("\"state\":\"printing\"") != std::string::npos;
+            return !m->printing();
+        });
+        CHECK(saw_live);
+        std::string ob = m->moonraker_objects_json();
+        CHECK(ob.find("{\"name\":\"CUBE_A\",\"center\":[30.000,30.000],\"polygon\":[[20.000,20.000],[40.000,20.000],[40.000,40.000],[20.000,40.000]],\"PI_Z0\":0.000,\"PI_Z1\":10.500}") != std::string::npos);
+        CHECK(ob.find("{\"name\":\"CUBE_B\",\"center\":[60.000,60.000]}") != std::string::npos);   // no outline: none claimed
+        std::string st = m->moonraker_status_json(mr.rig.now);
+        CHECK(st.find("\"state\":\"complete\"") != std::string::npos);
+        CHECK(st.find("\"is_paused\":false") != std::string::npos);
+        CHECK(st.find("\"exclude_object\":{\"excluded_objects\":[],\"current_object\":null}") != std::string::npos);
+        // the head went from X20 to X80 and never backwards; the filament used is the 6 mm pushed
+        CHECK(xs.size() > 10);
+        bool mono = true;   // after the first move (to X20, from wherever the head was) it only goes up
+        size_t lo = size_t(std::min_element(xs.begin(), xs.end()) - xs.begin());
+        for (size_t i = lo + 1; i < xs.size(); i++) mono &= xs[i] >= xs[i - 1] - 0.05;
+        CHECK(mono);
+        CHECK(xs.back() > 79.0 && xs.back() < 80.1);
+        double lp[4];
+        CHECK(m->toolhead()->live_position(mr.rig.now, lp));
+        NEAR(lp[0], 80.0, 0.05);
+        NEAR(lp[3], 6.0, 0.05);
+        CHECK(st.find("\"filament_used\":") != std::string::npos);
+        NEAR(m->toolhead()->extruded(), 6.0, 0.05);
+        // excluding bumps the revision and shows in the list (what the dongle sends)
+        unsigned rev1 = m->objects_rev();
+        CHECK(m->command("EXCLUDE_OBJECT NAME=cube_b", mr.rig.now).rfind("ok CUBE_B excluded", 0) == 0);
+        CHECK(m->objects_rev() > rev1);
+        CHECK(m->moonraker_status_json(mr.rig.now).find("\"excluded_objects\":[\"CUBE_B\"]") != std::string::npos);
+        CHECK(m->command("EXCLUDE_OBJECT RESET=1", mr.rig.now).rfind("ok no objects excluded", 0) == 0);
+        CHECK(m->moonraker_status_json(mr.rig.now).find("\"excluded_objects\":[]") != std::string::npos);
+        // RESPOND: the text reaches the console, quotes and spaces kept
+        CHECK(m->command("RESPOND MSG=\"pasta: excluded CUBE_B\"", mr.rig.now) == "ok echo: pasta: excluded CUBE_B");
+        CHECK(m->command("respond PREFIX=pasta MSG=hi", mr.rig.now) == "ok pasta hi");
+    }
+    {   // pause and the emergency stop, as the dongle sends them
+        MotionRig mr;
+        BoardPlan plan;
+        std::unique_ptr<Machine> m;
+        homed_machine(base, mr, plan, m);
+        mr.rig.file = {"G90", "M82", "G92 E0", "G1 X20 Y20 F6000", "G1 X70 Y20 E5 F300", "G1 X20 Y60 E10 F300"};
+        CHECK(m->command("SDCARD_PRINT_FILE", mr.rig.now).rfind("ok printing", 0) == 0);
+        mr.run(*m, 1.0, [&]() { return false; });
+        CHECK(m->command("PAUSE", mr.rig.now) == "ok paused");
+        std::string st = m->moonraker_status_json(mr.rig.now);
+        CHECK(st.find("\"state\":\"paused\"") != std::string::npos);
+        CHECK(st.find("\"is_paused\":true") != std::string::npos);
+        CHECK(m->command("RESUME", mr.rig.now) == "ok resumed");
+        CHECK(m->command("CANCEL_PRINT", mr.rig.now).rfind("ok print cancelled", 0) == 0);
+        CHECK(m->moonraker_status_json(mr.rig.now).find("\"state\":\"cancelled\"") != std::string::npos);
+    }
     // ---- TUNING_TOWER for pressure advance: the value follows the height while printing
     {
         MotionRig mr;
@@ -1582,6 +1657,7 @@ static void test_g28_after_false_trigger() {
 // 2026-10-27: CoreXY (Klipper corexy.py), for the QIDI X-Smart 3 test bench: motor A (stepper_x)
 // = X + Y, motor B (stepper_y) = X - Y. Moves, homing (both motors, stopped by the axis' endstop)
 // and the resonance test.
+#if PH_KIN_COREXY
 static void test_corexy() {
     MsgProto mp;
     std::string err;
@@ -1678,13 +1754,14 @@ static void test_corexy() {
     CHECK(m2.command("G28", mr2.rig.now).find("same steps per mm") != std::string::npos ||
           m2.toolhead() == nullptr || !m2.toolhead()->ok());
 }
+#endif
 
 // 2026-10-27: a chamber thermistor on a spare ESP32-S3 pin ([temperature_sensor chamber],
 // sensor_pin: esp32:gpio7): read by the ESP32 once a second, shown like any sensor, nothing sent to
 // the printer board, and nothing shuts down when it is missing.
 // 2026-10-27: the QIDI X-Smart 3 on an SKR Pico: CoreXY, Z homes on the probe, a 9.5:1 extruder,
 // a chamber sensor on the ESP32. It must parse, and G28 must home in the simulation.
-static void test_qidi_xsmart3() {
+[[maybe_unused]] static void test_qidi_xsmart3() {
     MsgProto mp;
     std::string err;
     CHECK(mp.load_dictionary(SKR_PICO_DICT, &err));
@@ -1725,7 +1802,7 @@ static void test_qidi_xsmart3() {
 
 // 2026-10-27: SF_BENCH on the fake board (no printer board): the benchmark file runs to the end, the
 // drivers are never switched on, the axes are not homed afterwards, and every stage was timed.
-static void test_print_bench() {
+[[maybe_unused]] static void test_print_bench() {
     MsgProto mp;
     std::string err;
     CHECK(mp.load_dictionary(SKR_PICO_DICT, &err));
@@ -1919,6 +1996,156 @@ static void test_host_sensor() {
     CHECK(!m.is_shutdown() && m.command("M105", mr.rig.now).find("chamber: no sensor?") != std::string::npos);
 }
 
+// ---- delta kinematics (2026-10-31)
+static std::string delta_cfg(const char* extra_printer = "arm_length: 250\n", bool with_c = true) {
+    std::string c =
+        "[mcu]\nserial: uart\n\n"
+        "[printer]\nkinematics: delta\nmax_velocity: 200\nmax_accel: 2000\nmax_z_velocity: 100\nmax_z_accel: 1000\n"
+        "delta_radius: 100\nprint_radius: 80\n";
+    c += extra_printer;
+    c += "\n[stepper_a]\nstep_pin: gpio11\ndir_pin: gpio10\nenable_pin: !gpio12\nmicrosteps: 16\nrotation_distance: 40\n"
+         "endstop_pin: ^gpio4\nposition_endstop: 300\nhoming_speed: 50\n\n"
+         "[stepper_b]\nstep_pin: gpio6\ndir_pin: gpio5\nenable_pin: !gpio7\nmicrosteps: 16\nrotation_distance: 40\n"
+         "endstop_pin: ^gpio3\nposition_endstop: 300\nhoming_speed: 50\n\n";
+    if (with_c)
+        c += "[stepper_c]\nstep_pin: gpio19\ndir_pin: gpio28\nenable_pin: !gpio2\nmicrosteps: 16\nrotation_distance: 40\n"
+             "endstop_pin: ^gpio25\nposition_endstop: 300\nhoming_speed: 50\n\n";
+    c += "[extruder]\nstep_pin: gpio14\ndir_pin: !gpio13\nenable_pin: !gpio15\nmicrosteps: 16\n"
+         "rotation_distance: 33.725\nnozzle_diameter: 0.4\nfilament_diameter: 1.750\nheater_pin: gpio23\n"
+         "sensor_type: EPCOS 100K B57560G104F\nsensor_pin: gpio27\ncontrol: pid\npid_Kp: 41.141\n"
+         "pid_Ki: 2.716\npid_Kd: 155.822\nmin_temp: 0\nmax_temp: 240\n";
+    return c;
+}
+
+#if PH_KIN_DELTA
+static void test_delta() {
+    MsgProto mp;
+    std::string err;
+    CHECK(mp.load_dictionary(SKR_PICO_DICT, &err));
+    // config errors
+    {
+        BoardPlan bad = build_board_plan(delta_cfg("").c_str(), mp, 12e6);
+        bool arm = false;
+        for (auto& e : bad.errors) arm |= e.find("arm_length") != std::string::npos;
+        CHECK(arm);
+        BoardPlan nc = build_board_plan(delta_cfg("arm_length: 250\n", false).c_str(), mp, 12e6);
+        bool needc = false;
+        for (auto& e : nc.errors) needc |= e.find("stepper_c") != std::string::npos;
+        CHECK(needc);
+    }
+    BoardPlan plan = build_board_plan(delta_cfg().c_str(), mp, 12e6);
+    for (auto& e : plan.errors) printf("  delta printer.cfg error: %s\n", e.c_str());
+    CHECK(plan.errors.empty() && plan.printer.delta);
+    plan.move_count = 1024;
+    Rig rig;
+    Machine m(plan, mp, rig.io());
+    m.start(rig.now);
+    const auto& es = plan.sensors[size_t(plan.heater("extruder")->sensor)];
+    m.on_message(adc(es.oid, es.th.calc_adc(25) * 8 * 4095.0), rig.now);
+    CHECK(m.toolhead() && m.toolhead()->ok());
+    if (!m.toolhead() || !m.toolhead()->ok()) return;
+    CHECK(m.command("G1 X10", rig.now).find("Must home axis first") != std::string::npos);
+    // G28 (any axis letters) homes the three towers together: three endstops armed at once
+    rig.trsync_armed.clear();
+    CHECK(m.command("G28 X", rig.now).rfind("ok homing", 0) == 0);
+    for (int i = 0; i < 20; i++) rig.now += 0.05, m.tick(rig.now);
+    CHECK(rig.trsync_armed.size() == 3);
+    const char* nm[3] = {"stepper_a", "stepper_b", "stepper_c"};
+    const StepperObj* st[3] = {plan.stepper(nm[0]), plan.stepper(nm[1]), plan.stepper(nm[2])};
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass) {   // back off by homing_retract_dist, then a second approach
+            for (int i = 0; i < 600 && rig.trsync_armed.size() < 3; i++) rig.now += 0.05, m.tick(rig.now);
+            CHECK(rig.trsync_armed.size() == 3);
+        }
+        for (int i = 0; i < 3; i++) m.on_message(trsync_hit(st[i]->trsync_oid), rig.now);
+        for (int i = 0; i < 10; i++) rig.now += 0.05, m.tick(rig.now);
+        if (!pass) rig.trsync_armed.clear();
+    }
+    for (int i = 0; i < 200 && m.toolhead()->homing(); i++) rig.now += 0.05, m.tick(rig.now);
+    CHECK(!m.toolhead()->homing() && m.toolhead()->homed(0) && m.toolhead()->homed(1) && m.toolhead()->homed(2));
+    DeltaGeom g;
+    {
+        double arm[3] = {250, 250, 250}, ang[3] = {210, 330, 90};
+        g.set(arm, ang, 100);
+    }
+    double ab[3] = {300 + std::sqrt(250.0 * 250 - 100 * 100), 300 + std::sqrt(250.0 * 250 - 100 * 100), 300 + std::sqrt(250.0 * 250 - 100 * 100)};
+    double home[3];
+    CHECK(g.forward(ab, home));
+    NEAR(home[0], 0.0, 1e-9);
+    NEAR(home[1], 0.0, 1e-9);
+    NEAR(home[2], 300.0, 1e-9);
+    NEAR(m.toolhead()->position(0), home[0], 1e-6);
+    NEAR(m.toolhead()->position(2), home[2], 1e-6);
+    {   // forward undoes inverse everywhere inside the bed
+        double c[3], p[3];
+        CHECK(g.inverse(37.5, -52.25, 123.0, c) && g.forward(c, p));
+        NEAR(p[0], 37.5, 1e-9);
+        NEAR(p[1], -52.25, 1e-9);
+        NEAR(p[2], 123.0, 1e-9);
+    }
+    // limits: print_radius 80, Z between 0 and the lowest position_endstop
+    CHECK(m.command("G1 X85 F6000", rig.now).find("Move out of range") != std::string::npos);
+    CHECK(m.command("G1 Z301 F6000", rig.now).find("Move out of range") != std::string::npos);
+    CHECK(m.command("G1 Z-1 F6000", rig.now).find("Move out of range") != std::string::npos);
+    // a move away from the middle: every step the three towers take, in time order, must keep the head
+    // on the straight line (the cross-track error would show a wrongly linear tower mapping)
+    size_t mark = rig.sent.size();
+    CHECK(m.command("G1 X60 Y-40 Z120 F6000", rig.now) == "ok");
+    CHECK(m.command("G1 X-50 Y55 Z200 F6000", rig.now) == "ok");
+    CHECK(m.command("G1 X0 Y0 Z300 F6000", rig.now) == "ok");
+    for (int i = 0; i < 400; i++) rig.now += 0.05, m.tick(rig.now);
+    StepReplay rp[3];
+    for (size_t i = mark; i < rig.sent.size(); i++)
+        for (int k = 0; k < 3; k++) rp[k].feed(rig.sent[i].second, st[k]->oid);
+    struct Ev { uint64_t clk; int k, d; };
+    std::vector<Ev> ev;
+    for (int k = 0; k < 3; k++)
+        for (auto& e : rp[k].steps) ev.push_back({e.first, k, e.second ? 1 : -1});
+    std::sort(ev.begin(), ev.end(), [](const Ev& a, const Ev& b) { return a.clk < b.clk; });
+    CHECK(ev.size() > 10000);
+    // net movement of each tower over the closed path is zero
+    long net[3] = {0, 0, 0};
+    for (auto& e : ev) net[e.k] += e.d;
+    for (int k = 0; k < 3; k++) CHECK(std::labs(net[k]) <= 1);
+    // positions along the way, from the carriage heights the steps add up to
+    double spm = st[0]->steps_per_mm();
+    long cnt[3] = {0, 0, 0};
+    double worst = 0;
+    const double wp[4][3] = {{0, 0, 300}, {60, -40, 120}, {-50, 55, 200}, {0, 0, 300}};
+    size_t n = 0;
+    for (auto& e : ev) {
+        cnt[e.k] += e.d;
+        if (++n % 37) continue;
+        double c[3] = {ab[0] + cnt[0] / spm, ab[1] + cnt[1] / spm, ab[2] + cnt[2] / spm}, p[3];
+        if (!g.forward(c, p)) { worst = 1e9; break; }
+        // distance to the nearest of the three straight segments
+        double best = 1e18;
+        for (int s2 = 0; s2 < 3; s2++) {
+            double d[3], w[3], dd = 0, t = 0;
+            for (int j = 0; j < 3; j++) d[j] = wp[s2 + 1][j] - wp[s2][j], w[j] = p[j] - wp[s2][j], dd += d[j] * d[j], t += d[j] * w[j];
+            t = std::min(1.0, std::max(0.0, t / dd));
+            double dist = 0;
+            for (int j = 0; j < 3; j++) dist += (w[j] - t * d[j]) * (w[j] - t * d[j]);
+            best = std::min(best, std::sqrt(dist));
+        }
+        worst = std::max(worst, best);
+    }
+    printf("  delta: %zu tower steps over 3 moves, worst distance of the head from the straight lines %.4f mm\n", ev.size(), worst);
+    CHECK(worst < 0.05);
+    NEAR(m.toolhead()->position(2), 300.0, 1e-6);
+    CHECK(m.command("M114", rig.now).find("Z:300.000") != std::string::npos);
+    // one tower that never reports its endstop: "No trigger on b"
+    rig.trsync_armed.clear();
+    CHECK(m.command("G28", rig.now).rfind("ok homing", 0) == 0);
+    for (int i = 0; i < 20; i++) rig.now += 0.05, m.tick(rig.now);
+    m.on_message(trsync_hit(st[0]->trsync_oid), rig.now);
+    m.on_message(trsync_hit(st[2]->trsync_oid), rig.now);
+    for (int i = 0; i < 2000 && m.toolhead()->homing(); i++) rig.now += 0.05, m.tick(rig.now);
+    CHECK(!m.toolhead()->homing() && m.toolhead()->last_error().find("No trigger on b") != std::string::npos);
+    CHECK(!m.toolhead()->homed(0));
+}
+#endif
+
 void test_toolhead() {
     test_home_all_timing(32, 0.04, 0.0005);
     test_home_all_timing(256, 0.04, 0.0005);
@@ -1933,10 +2160,17 @@ void test_toolhead() {
     test_panel();
     test_stale_now_moves();
     test_g28_after_false_trigger();
+#if PH_KIN_COREXY
     test_corexy();
+#endif
+#if PH_KIN_DELTA
+    test_delta();
+#endif
     test_host_sensor();
+#if PH_KIN_COREXY   // these use the CoreXY QIDI preset
     test_qidi_xsmart3();
     test_print_bench();
+#endif
     test_bench_slow_host();
     test_review_fixes();
     test_toolhead_shaping();

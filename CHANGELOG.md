@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
 
 First public snapshot. **Proof of concept; many features may be broken.** Real-hardware results are in [docs/HARDWARE_LOG.md](docs/HARDWARE_LOG.md).
 
+### Added (2026-10-31): delta kinematics
+- `kinematics: delta` (Klipper `delta.py` maths): `stepper_a/b/c`, `delta_radius`, `print_radius`, `arm_length`, `minimum_z_position`; the three towers home together, move limits, edge speed cut, probing on all three towers. The shaper and planner are untouched: tower steps come from the inverse kinematics at the end of the pipeline. See [docs/DELTA.md](docs/DELTA.md). PC-tested (path error 0.04 mm); not run on a real delta; firmware not compiled with ESP-IDF here.
+- Separate DECKHAND builds (flash): default DECKHAND = cartesian + CoreXY; `-DSF_KIN=delta` = cartesian + delta. CAPTAIN / SKIPPER have all. Build switches `PH_KIN_COREXY` / `PH_KIN_DELTA`. Flash size of the delta image not measured yet.
+- Not yet: delta calibration, round bed mesh, resonance test on a delta.
+
+### Added (2026-10-31): Pasta Inspector dongle (ESP32-CAM) can end failed prints
+- Moonraker-style `/websocket` on the ESP32-S3 (CAPTAIN+) so the dongle can `EXCLUDE_OBJECT`, `PAUSE`, `M112` and `RESPOND`, and read print state; `EXCLUDE_OBJECT_DEFINE` now keeps polygons and heights. See [docs/PASTA_DONGLE.md](docs/PASTA_DONGLE.md). Engine PC-tested; **firmware not compiled with ESP-IDF, not tried with a real dongle.**
+
+### Added (2026-10-30): stripboard wiring diagram
+- [docs/WIRING_STRIPBOARD.md](docs/WIRING_STRIPBOARD.md): module pinout with wire colours, a stripboard layout (cuts, sockets, buses, resistors) and the four wires to the SKR Pico's UART header. Drawn only, not built yet.
+
 ### Works on real hardware
 - Clock sync, `printer.cfg` and the `SET_LED` console ran on an ESP32-S3-Zero type board with a bare SKR Pico for about 41 minutes: board clock measured at 12,000,464 Hz (+38.7 ppm), 2,430 samples, 0 CRC errors
 - First real Klipper behaviour: the ESP32-S3 configures the printer board like Klipper's host (`allocate_oids`, `config_neopixel`, `finalize_config` with a zlib CRC-32, reset-and-reconfigure on a mismatch) and drives the SKR Pico's on-board RGB LED from buttons on the status page (`/board_led`). New `ph::KBoard`, binary `hex:` arguments in the encoder, `klink_probe --neopixel`, NeoPixel and config-CRC support in `fake_mcu.py`; tested end to end on the PC.

@@ -92,6 +92,7 @@ itself. Refused while a print runs.
 | Print benchmark `SF_BENCH` ([BENCHMARK.md](BENCHMARK.md)) (2026-10-28) | no | yes | yes |
 | Important-events log (Log page) (2026-10-28) | yes | yes | yes |
 | CoreXY, probe Z homing, gear_ratio (2026-10-27) | yes | yes | yes |
+| Delta kinematics (2026-10-31; [DELTA.md](DELTA.md)) | **separate build** (instead of CoreXY) | yes | yes |
 | Chamber thermistor on the ESP32 ([CHAMBER_SENSOR.md](CHAMBER_SENSOR.md)) (2026-10-27) | no | yes | yes |
 | CPU 240 MHz / bigger caches (2026-10-27) | 240 MHz / default caches | 240 MHz / 32 KB I + 64 KB D | 240 MHz / 32 KB I + 64 KB D |
 | Flash G-code store (no card) | 484 KB | 468 KB | 1.71 MB |

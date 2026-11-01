@@ -1655,6 +1655,7 @@ static void http_start(void)
     sf_ota_register(srv);
     sf_crash_register(srv);
     sf_pro_register(srv);
+    sf_moonraker_register(srv);   // /websocket for the Pasta Inspector dongle (CAPTAIN+, needs HTTPD_WS_SUPPORT)
     sf_tune_register(srv);
     sf_accel_init(&s_settings, srv);
     sf_panel_start(&s_settings, srv);

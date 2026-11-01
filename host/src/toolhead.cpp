@@ -191,6 +191,7 @@ static const char AXL[4] = {'X', 'Y', 'Z', 'E'};
 
 Toolhead::Toolhead(BoardPlan& plan, ToolheadIO io) : plan_(plan), io_(std::move(io)) {
     const char* names[NUM_AXES] = {"stepper_x", "stepper_y", "stepper_z", "extruder"};
+    if (PH_KIN_DELTA && plan_.printer.delta) names[0] = "stepper_a", names[1] = "stepper_b", names[2] = "stepper_c";
     for (int a = 0; a < NUM_AXES; a++) {
         StepperObj* s = plan_.stepper(names[a]);
         if (s) si_[a] = int(s - plan_.steppers.data());
@@ -209,8 +210,40 @@ Toolhead::Toolhead(BoardPlan& plan, ToolheadIO io) : plan_(plan), io_(std::move(
         double a = plan_.steppers[size_t(si_[0])].steps_per_mm(), b = plan_.steppers[size_t(si_[1])].steps_per_mm();
         if (std::fabs(a - b) > 1e-9 * a)
             why_not_ = "corexy needs the same steps per mm on stepper_x and stepper_y (rotation_distance, microsteps)";
-        corexy_ = true;
+        corexy_ = PH_KIN_COREXY;
     }
+#if PH_KIN_DELTA
+    if (why_not_.empty() && plan_.printer.delta) {
+        const PrinterLimits& pr = plan_.printer;
+        double arm[3], ang[3], endst[3];
+        for (int i = 0; i < 3; i++) {
+            const StepperObj& t = plan_.steppers[size_t(si_[i])];
+            arm[i] = t.arm_length > 0 ? t.arm_length : pr.arm_length, ang[i] = t.angle, endst[i] = t.position_endstop;
+            if (std::fabs(t.steps_per_mm() - plan_.steppers[size_t(si_[0])].steps_per_mm()) > 1e-9 * t.steps_per_mm())
+                why_not_ = "a delta needs the same steps per mm on stepper_a, b and c (rotation_distance, microsteps)";
+        }
+        dg_.set(arm, ang, pr.delta_radius);
+        if (why_not_.empty() && !dg_.valid) why_not_ = "delta: arm_length must be longer than delta_radius";
+        if (why_not_.empty()) {
+            // Klipper delta.py
+            dspm_ = plan_.steppers[size_t(si_[0])].steps_per_mm();
+            for (int i = 0; i < 3; i++) dabs_end_[i] = endst[i] + std::sqrt(dg_.arm2[i] - dg_.radius * dg_.radius);
+            if (!dg_.forward(dabs_end_, dhome_)) why_not_ = "delta: the arms cannot reach a point at the endstops (check arm_length, position_endstop)";
+            double half_step = 0.5 / dspm_, min_arm = std::min(arm[0], std::min(arm[1], arm[2]));
+            auto ratio_to_dist = [&](double ratio) {
+                return ratio * std::sqrt(min_arm * min_arm / (ratio * ratio + 1.0) - half_step * half_step) + half_step;
+            };
+            double r4 = ratio_to_dist(4.0), r9 = ratio_to_dist(9.0);
+            dslow_xy2_ = (r4 - pr.delta_radius) * (r4 - pr.delta_radius);
+            dvslow_xy2_ = (r9 - pr.delta_radius) * (r9 - pr.delta_radius);
+            double mx = std::min(pr.print_radius, std::min(min_arm - pr.delta_radius, r4 - pr.delta_radius));
+            dmax_xy2_ = mx * mx;
+            dmax_z_ = std::min(endst[0], std::min(endst[1], endst[2]));
+            dmin_z_ = pr.minimum_z_position;
+            delta_ = true;
+        }
+    }
+#endif
     ok_ = why_not_.empty();
     if (!ok_) return;
     const PrinterLimits& pr = plan_.printer;
@@ -259,9 +292,46 @@ Toolhead::Toolhead(BoardPlan& plan, ToolheadIO io) : plan_(plan), io_(std::move(
 #endif
 }
 
+// Effector steps (X Y Z, in the tower step size) -> the steps each tower takes: the tower is where the
+// inverse kinematics puts it for the effector's position so far, so rounding never builds up. One
+// call per shaper / planner interval (2-5 ms), within which a tower's path is a straight line to
+// well under a step except right beside a tower.
+void Toolhead::delta_steps(const int32_t in[NUM_AXES], int32_t out[NUM_AXES]) {
+#if PH_KIN_DELTA
+    for (int i = 0; i < 3; i++) dcart_[i] += in[i];
+    double c[3];
+    out[3] = in[3];
+    if (!dg_.inverse(double(dcart_[0]) / dspm_, double(dcart_[1]) / dspm_, double(dcart_[2]) / dspm_, c)) {
+        out[0] = out[1] = out[2] = 0;   // out of reach (the limits keep it from happening): hold the towers
+        return;
+    }
+    for (int i = 0; i < 3; i++) {
+        int64_t t = int64_t(std::llround(c[i] * dspm_));
+        out[i] = int32_t(t - dtow_[i]);
+        dtow_[i] = t;
+    }
+#else
+    for (int i = 0; i < NUM_AXES; i++) out[i] = in[i];
+#endif
+}
+
+// The planner's position was set (homing, SET_KINEMATIC_POSITION, a stop): a delta also needs to know
+// where its towers are for it.
+void Toolhead::set_planner_position(const double pos[NUM_AXES]) {
+    planner_->set_position(pos);
+#if PH_KIN_DELTA
+    if (dlt()) {
+        double c[3];
+        for (int i = 0; i < 3; i++) dcart_[i] = int64_t(std::llround(pos[i] * dspm_));
+        if (dg_.inverse(pos[0], pos[1], pos[2], c))
+            for (int i = 0; i < 3; i++) dtow_[i] = int64_t(std::llround(c[i] * dspm_));
+    }
+#endif
+}
+
 std::vector<std::pair<size_t, int>> Toolhead::axis_motors(int axis) const {
-    if (corexy_ && axis == 0) return {{size_t(si_[0]), 1}, {size_t(si_[1]), 1}};    // +X: A+, B+
-    if (corexy_ && axis == 1) return {{size_t(si_[0]), 1}, {size_t(si_[1]), -1}};   // +Y: A+, B-
+    if (cxy() && axis == 0) return {{size_t(si_[0]), 1}, {size_t(si_[1]), 1}};    // +X: A+, B+
+    if (cxy() && axis == 1) return {{size_t(si_[0]), 1}, {size_t(si_[1]), -1}};   // +Y: A+, B-
     return {{size_t(si_[axis]), 1}};
 }
 
@@ -269,9 +339,11 @@ void Toolhead::emit_steps(double t0, double T, const int32_t steps_in[NUM_AXES])
     PerfScope ps(this, MotionPerf::STEPS);
     double c0 = double(io_.clock_at(t0)), c1 = double(io_.clock_at(t0 + T));
     int32_t steps[NUM_AXES] = {steps_in[0], steps_in[1], steps_in[2], steps_in[3]};
-    if (corexy_) {   // X and Y steps -> motor A and B steps (same steps/mm, so exact integers)
+    if (cxy()) {   // X and Y steps -> motor A and B steps (same steps/mm, so exact integers)
         steps[0] = steps_in[0] + steps_in[1];
         steps[1] = steps_in[0] - steps_in[1];
+    } else if (dlt()) {
+        delta_steps(steps_in, steps);
     }
     for (int a = 0; a < NUM_AXES; a++) {
         int32_t st = steps[a];
@@ -290,9 +362,11 @@ void Toolhead::emit_steps(double t0, double T, const int32_t steps_in[NUM_AXES])
 void Toolhead::emit_steps_clk(uint64_t c0, uint64_t c1, const int32_t steps_in[NUM_AXES]) {
     PerfScope ps(this, MotionPerf::STEPS);
     int32_t steps[NUM_AXES] = {steps_in[0], steps_in[1], steps_in[2], steps_in[3]};
-    if (corexy_) {
+    if (cxy()) {
         steps[0] = steps_in[0] + steps_in[1];
         steps[1] = steps_in[0] - steps_in[1];
+    } else if (dlt()) {
+        delta_steps(steps_in, steps);
     }
     const uint64_t span = c1 > c0 ? c1 - c0 : 0;
     for (int a = 0; a < NUM_AXES; a++) {
@@ -333,6 +407,12 @@ void Toolhead::on_segment_plan(const Segment& s) {
     double f = io_.now ? std::max(now_, io_.now()) : now_;
     if (t_ < f + 0.1) t_ = f + 0.2;
     double T = double(s.n) / pcfg_.dda_hz;
+    {   // where the head is at any moment (live_position) and how much filament has gone (extruded)
+        LiveSeg ls{t_, t_ + T, {s.steps[0], s.steps[1], s.steps[2], s.steps[3]}};
+        live_.push_back(ls);
+        while (!live_.empty() && live_.front().t1 < f - 2.0) live_.pop_front();
+        if (s.steps[3] > 0 && pcfg_.steps_per_mm[3] > 0) extruded_ += double(s.steps[3]) / pcfg_.steps_per_mm[3];
+    }
     perf_.segments++;
     segs_since_send_++;
 #if PH_FIXED
@@ -444,7 +524,7 @@ void Toolhead::stop(double now) {
     for (int a = 0; a < NUM_AXES; a++) pos[a] = planner_->position(a);
     planner_.reset(new Planner(pcfg_));
     planner_->set_sinks([this](const Segment& s) { on_segment(s); });
-    planner_->set_position(pos);   // where it was planned to be: not reliable after a stop
+    set_planner_position(pos);   // where it was planned to be: not reliable after a stop
     for (auto& q : sq_) q.clear_pending(), q.reset();
     shaper_.reset();
     if (shaping_pending_) shaper_.configure(shaping_next_), shaping_pending_ = false;
@@ -455,6 +535,7 @@ void Toolhead::stop(double now) {
     inflight_ = decltype(inflight_)();
     inflight_count_ = 0;
     late_.clear();
+    live_.clear();
 }
 
 void Toolhead::motors_off(double now) {
@@ -466,6 +547,20 @@ void Toolhead::motors_off(double now) {
 }
 
 std::string Toolhead::check_limits(const double tgt[NUM_AXES]) const {
+#if PH_KIN_DELTA
+    if (dlt()) {   // delta.py check_move: inside the print radius, between minimum_z_position and the lowest endstop
+        bool moved = false;
+        for (int a = 0; a < 3; a++) moved |= std::fabs(tgt[a] - planner_->position(a)) >= 1e-9;
+        if (!moved) return "";
+        for (int a = 0; a < 3; a++)
+            if (!homed_[a]) return "Must home axis first: " + std::string(1, 'A' + a) + " (G28, or SET_KINEMATIC_POSITION to test)";
+        double r2 = tgt[0] * tgt[0] + tgt[1] * tgt[1];
+        if (r2 > dmax_xy2_ + 1e-6 || tgt[2] < dmin_z_ - 1e-6 || tgt[2] > dmax_z_ + 1e-6)
+            return "Move out of range: " + f3(tgt[0]) + " " + f3(tgt[1]) + " " + f3(tgt[2]) + " (radius " + f3(std::sqrt(dmax_xy2_)) +
+                   ", Z " + f3(dmin_z_) + ".." + f3(dmax_z_) + ")";
+        return "";
+    }
+#endif
     for (int a = 0; a < 3; a++) {
         const StepperObj& s = plan_.steppers[size_t(si_[a])];
         if (std::fabs(tgt[a] - planner_->position(a)) < 1e-9) continue;
@@ -482,6 +577,13 @@ void Toolhead::add_planned_move(const double tgt[NUM_AXES], double feed, double 
         PerfScope ps(this, MotionPerf::PLAN);
         ensure_time(now);
         enable_all(now);
+#if PH_KIN_DELTA
+        if (dlt()) {   // delta.py: near the edge a tower runs several times faster than the head
+            double r2 = tgt[0] * tgt[0] + tgt[1] * tgt[1];
+            double r = r2 > dvslow_xy2_ ? 0.25 : r2 > dslow_xy2_ ? 0.5 : 1.0;
+            if (r < 1.0) feed = std::min(feed, plan_.printer.max_velocity * r);
+        }
+#endif
         planner_->add_move(tgt, feed);
         last_add_ = now;
     }
@@ -776,7 +878,7 @@ std::string Toolhead::gcode(const std::string& name, const GLine* g, const std::
             for (int a = 0; a < 3; a++) homed_[a] = true, gpos_[a] = pos[a] - off_[a];
             done = "XYZ";
         }
-        planner_->set_position(pos);
+        set_planner_position(pos);
         return "ok " + done + " marked as homed (no homing move was made)";
     }
     if (name == "QUERY_ENDSTOPS") {
@@ -785,13 +887,14 @@ std::string Toolhead::gcode(const std::string& name, const GLine* g, const std::
             const StepperObj& s = plan_.steppers[size_t(si_[a])];
             if (s.endstop < 0) continue;
             const EndstopObj& e = plan_.endstops[size_t(s.endstop)];
+            const char lab = dlt() ? char('a' + a) : char(tolower(AXL[a]));
             Message m;
             if (!io_.query("endstop_query_state oid=" + std::to_string(e.oid), "endstop_state", e.oid, m, 200)) {
-                r += std::string(" ") + char(tolower(AXL[a])) + ":no answer";
+                r += std::string(" ") + lab + ":no answer";
                 continue;
             }
             bool trig = (m.get("pin_value") != 0) != e.invert;
-            r += std::string(" ") + char(tolower(AXL[a])) + ":" + (trig ? "TRIGGERED" : "open") + (e.tmc >= 0 ? "(stallguard)" : "");
+            r += std::string(" ") + lab + ":" + (trig ? "TRIGGERED" : "open") + (e.tmc >= 0 ? "(stallguard)" : "");
         }
         return r;
     }
@@ -799,7 +902,7 @@ std::string Toolhead::gcode(const std::string& name, const GLine* g, const std::
         std::vector<int> axes;
         for (int a = 0; a < 3; a++)
             if (g && g->has(AXL[a])) axes.push_back(a);
-        if (axes.empty()) axes = {0, 1, 2};
+        if (axes.empty() || dlt()) axes = {0, 1, 2};   // a delta homes its three towers together
         return start_home(axes, false, now);
     }
     if (name == "PROBE") {
@@ -868,7 +971,14 @@ void Toolhead::schedule_homing_move(size_t i, int dir, double dist, double speed
     }
 }
 
+// Probing: Z alone on a cartesian printer; on a delta all three towers go down together.
+std::vector<std::pair<size_t, int>> Toolhead::probe_motors(size_t i) const {
+    if (dlt()) return {{size_t(si_[0]), 1}, {size_t(si_[1]), 1}, {size_t(si_[2]), 1}};
+    return {{i, 1}};
+}
+
 bool Toolhead::home_begin_axis(double now) {
+    if (dlt() && !hj_.probe) return home_begin_delta(now);
     int a = hj_.axes[hj_.idx];
     size_t i = size_t(si_[a]);
     const StepperObj& s = plan_.steppers[i];
@@ -879,7 +989,7 @@ bool Toolhead::home_begin_axis(double now) {
     if (hj_.probe) {
         speed = plan_.probe.speed;
         dir = 0;
-        dist = planner_->position(2) - s.position_min;
+        dist = planner_->position(2) - (dlt() ? dmin_z_ : s.position_min);
         if (dist <= 0.01) {
             home_fail("Z is already at position_min: nothing to probe", now);
             return false;
@@ -896,7 +1006,7 @@ bool Toolhead::home_begin_axis(double now) {
     enable_all(now);
     bool ok = true;
     hj_.pos_before = mcu_position(i, &ok);
-    if (ok && corexy_ && !hj_.probe && a < 2) hj_.pos_before_b = mcu_position(size_t(si_[1 - a]), &ok);
+    if (ok && cxy() && !hj_.probe && a < 2) hj_.pos_before_b = mcu_position(size_t(si_[1 - a]), &ok);
     if (!ok) {
         home_fail("the board did not report the stepper position", now);
         return false;
@@ -911,7 +1021,7 @@ bool Toolhead::home_begin_axis(double now) {
     double rest = 1.0 / std::max(1.0, speed * s.steps_per_mm());
     // CoreXY: X and Y homing moves turn both motors; both stop on the axis' endstop (Klipper adds
     // every stepper that moves the axis to its endstop).
-    auto motors = hj_.probe ? std::vector<std::pair<size_t, int>>{{i, 1}} : axis_motors(a);
+    auto motors = hj_.probe ? probe_motors(i) : axis_motors(a);
     std::string T = std::to_string(s.trsync_oid), E = std::to_string(es.oid);
     std::vector<std::string> cmds = {
         "trsync_start oid=" + T + " report_clock=" + std::to_string(uint32_t(io_.clock_at(t0))) +
@@ -970,6 +1080,7 @@ bool Toolhead::home_begin_axis(double now) {
 std::string Toolhead::start_resonance(int axis, const ResonanceMotion& m, double now) {
     if (!ok_) return "moves are not set up: " + why_not_;
     if (axis < 0 || axis > 1) return "the resonance test runs along X or Y";
+    if (dlt()) return "the resonance test is not supported on a delta yet";
     if (!homed_[axis]) return std::string("home ") + AXL[axis] + " first";
     if (rs_.active || hstate_ != H_IDLE || !idle(now)) return "wait until nothing moves";
     const StepperObj& s = plan_.steppers[size_t(si_[axis])];
@@ -1040,7 +1151,7 @@ void Toolhead::resonance_finish(double now) {
     double pos[NUM_AXES];
     for (int k = 0; k < NUM_AXES; k++) pos[k] = planner_->position(k);
     pos[rs_.axis] += double(rs_.s) / rs_.spm;   // where the steps left it (exact)
-    planner_->set_position(pos);
+    set_planner_position(pos);
     gpos_[rs_.axis] = pos[rs_.axis] - off_[rs_.axis];
     t_end_ = std::max(t_end_, now);
 }
@@ -1084,6 +1195,7 @@ void Toolhead::home_fail(const std::string& why, double now) {
 }
 
 void Toolhead::home_finish_axis(double now) {
+    if (dlt() && !hj_.probe) return home_finish_delta(now);
     int a = hj_.axes[hj_.idx];
     size_t i = size_t(si_[a]);
     const StepperObj& s = plan_.steppers[i];
@@ -1093,8 +1205,8 @@ void Toolhead::home_finish_axis(double now) {
                   " clock=0 sample_ticks=0 sample_count=0 rest_ticks=0 pin_value=0 trsync_oid=0 trigger_reason=0",
               "trsync_trigger oid=" + std::to_string(s.trsync_oid) + " reason=2"},
              nullptr);
-    bool cxy = corexy_ && !hj_.probe && a < 2;
-    for (auto& mo : (hj_.probe ? std::vector<std::pair<size_t, int>>{{i, 1}} : axis_motors(a)))
+    bool cxy = this->cxy() && !hj_.probe && a < 2;
+    for (auto& mo : (hj_.probe ? probe_motors(i) : axis_motors(a)))
         sq_[mo.first].clear_pending(), sq_[mo.first].reset();
     tmc_sensorless(e, false);
     bool ok = true;
@@ -1118,14 +1230,14 @@ void Toolhead::home_finish_axis(double now) {
         for (int k = 0; k < NUM_AXES; k++) pos[k] = planner_->position(k);
         if (ok) pos[a] += moved;
         homed_[a] = false;
-        planner_->set_position(pos);
+        set_planner_position(pos);
         return;
     }
     double pos[NUM_AXES];
     for (int k = 0; k < NUM_AXES; k++) pos[k] = planner_->position(k);
     if (hj_.probe) {
         pos[2] += moved;   // where it stopped
-        planner_->set_position(pos);
+        set_planner_position(pos);
         gpos_[2] = pos[2] - off_[2];
         probe_result_ = pos[2];
         have_probe_result_ = true;
@@ -1143,7 +1255,7 @@ void Toolhead::home_finish_axis(double now) {
         return;
     }
     pos[a] = s.position_endstop;
-    planner_->set_position(pos);
+    set_planner_position(pos);
     off_[a] = 0;
     gpos_[a] = pos[a];
     if (hj_.pass == 0 && s.homing_retract_dist > 0) {   // back off, then a second slower approach
@@ -1169,6 +1281,150 @@ void Toolhead::home_finish_axis(double now) {
         return;
     }
     hstate_ = H_WAIT_IDLE;
+}
+
+// ---- delta homing (delta.py home): the three carriages go up together; each stops on its own endstop
+
+bool Toolhead::home_begin_delta(double now) {
+#if PH_KIN_DELTA
+    const StepperObj* t[3] = {&plan_.steppers[size_t(si_[0])], &plan_.steppers[size_t(si_[1])], &plan_.steppers[size_t(si_[2])]};
+    // Klipper uses the first tower's speeds. Pass 0: from a made-up low position (forcepos) up to the
+    // home height; pass 1: a short slow approach after backing off.
+    double speed = hj_.pass == 0 ? t[0]->homing_speed : t[0]->second_homing_speed;
+    double max_arm2 = std::max(dg_.arm2[0], std::max(dg_.arm2[1], dg_.arm2[2]));
+    double dist = hj_.pass == 0 ? dhome_[2] + 1.5 * std::sqrt(std::max(0.0, max_arm2 - dmax_xy2_)) : t[0]->homing_retract_dist * 2;
+    double accel = plan_.printer.max_z_accel > 0 ? plan_.printer.max_z_accel : plan_.printer.max_accel;
+    if (accel <= 0) accel = 500;
+    // one trsync per distinct endstop (the first tower that uses it)
+    int group[3];
+    for (int i = 0; i < 3; i++) {
+        group[i] = i;
+        for (int k = 0; k < i; k++)
+            if (t[k]->endstop == t[i]->endstop) { group[i] = group[k]; break; }
+        hj_.tw_trsync[i] = t[group[i]]->trsync_oid;
+        hj_.tw_fin[i] = false, hj_.tw_reason[i] = 0;
+    }
+    for (int i = 0; i < 3; i++)
+        if (group[i] == i) tmc_sensorless(t[i]->endstop, true);
+    enable_all(now);
+    bool ok = true;
+    hj_.pos_before = mcu_position(size_t(si_[0]), &ok);
+    if (!ok) {
+        home_fail("the board did not report the stepper position", now);
+        return false;
+    }
+    if (io_.now) now = std::max(now, io_.now());
+    double t0 = now + 0.3;
+    double ta = speed / accel, da = speed * speed / (2 * accel);
+    double move_t = dist <= da ? std::sqrt(2 * dist / accel) : ta + (dist - da) / speed;
+    double f = double(io_.clock_at(now + 1.0)) - double(io_.clock_at(now));
+    double rest = 1.0 / std::max(1.0, speed * t[0]->steps_per_mm());
+    std::vector<std::string> cmds;
+    for (int g = 0; g < 3; g++) {
+        if (group[g] != g) continue;
+        const EndstopObj& es = plan_.endstops[size_t(t[g]->endstop)];
+        std::string T = std::to_string(t[g]->trsync_oid), E = std::to_string(es.oid);
+        cmds.push_back("trsync_start oid=" + T + " report_clock=" + std::to_string(uint32_t(io_.clock_at(t0))) +
+                       " report_ticks=" + std::to_string(uint32_t(0.05 * f)) + " expire_reason=3");
+        for (int i = 0; i < 3; i++)
+            if (group[i] == g) cmds.push_back("stepper_stop_on_trigger oid=" + std::to_string(t[i]->oid) + " trsync_oid=" + T);
+        cmds.push_back("trsync_set_timeout oid=" + T + " clock=" + std::to_string(uint32_t(io_.clock_at(t0 + move_t + 0.2))));
+        cmds.push_back("endstop_home oid=" + E + " clock=" + std::to_string(uint32_t(io_.clock_at(t0))) +
+                       " sample_ticks=" + std::to_string(uint32_t(0.000015 * f)) + " sample_count=4 rest_ticks=" +
+                       std::to_string(uint32_t(rest * f)) + " pin_value=" + (es.invert ? "0" : "1") + " trsync_oid=" + T +
+                       " trigger_reason=1");
+    }
+    for (int i = 0; i < 3; i++) {
+        sq_[size_t(si_[i])].reset();
+        schedule_homing_move(size_t(si_[i]), 1, dist, speed, accel, t0);   // up: positive direction
+    }
+    int first_moves = 0;
+    for (int i = 0; i < 3; i++) first_moves += sq_[size_t(si_[i])].flush(io_.clock_at(t0 + SEND_AHEAD), cmds);
+    if (io_.now && io_.now() > t0 - 0.05) {   // too slow to prepare: send nothing late, start again
+        for (int i = 0; i < 3; i++) sq_[size_t(si_[i])].clear_pending(), sq_[size_t(si_[i])].reset();
+        for (int i = 0; i < 3; i++)
+            if (group[i] == i) tmc_sensorless(t[i]->endstop, false);
+        if (++hj_.late_tries >= 3) {
+            home_fail("the ESP32 could not prepare the homing move in time (3 tries)", now);
+            return false;
+        }
+        if (io_.log) io_.log("homing: move prepared too late, trying again");
+        hstate_ = H_WAIT_IDLE;
+        return false;
+    }
+    std::string err;
+    if (!io_.send(cmds, &err)) {
+        for (int i = 0; i < 3; i++)
+            if (group[i] == i) tmc_sensorless(t[i]->endstop, false);
+        home_fail("could not send the homing move: " + err, now);
+        return false;
+    }
+    if (first_moves) {
+        uint64_t lc = 0;
+        for (int i = 0; i < 3; i++) lc = std::max(lc, sq_[size_t(si_[i])].last_clock());
+        inflight_.push({lc, first_moves});
+        inflight_count_ += first_moves;
+    }
+    hj_.t_end = t0 + move_t;
+    hj_.triggered = hj_.finished = false;
+    hj_.reason = 0;
+    t_end_ = std::max(t_end_, hj_.t_end);
+    home_msg_ = std::string("homing ABC (delta towers)") + (hj_.pass ? " (second, slower approach)" : "");
+    return true;
+#else
+    (void)now;
+    return false;
+#endif
+}
+
+void Toolhead::home_finish_delta(double now) {
+#if PH_KIN_DELTA
+    const StepperObj* t[3] = {&plan_.steppers[size_t(si_[0])], &plan_.steppers[size_t(si_[1])], &plan_.steppers[size_t(si_[2])]};
+    // disarm every endstop that was armed (once each) and stop every tower's queue
+    for (int i = 0; i < 3; i++) {
+        bool first = true;
+        for (int k = 0; k < i; k++) first &= t[k]->endstop != t[i]->endstop;
+        if (!first) continue;
+        const EndstopObj& es = plan_.endstops[size_t(t[i]->endstop)];
+        io_.send({"endstop_home oid=" + std::to_string(es.oid) +
+                      " clock=0 sample_ticks=0 sample_count=0 rest_ticks=0 pin_value=0 trsync_oid=0 trigger_reason=0",
+                  "trsync_trigger oid=" + std::to_string(t[i]->trsync_oid) + " reason=2"},
+                 nullptr);
+        tmc_sensorless(t[i]->endstop, false);
+    }
+    for (int i = 0; i < 3; i++) sq_[size_t(si_[i])].clear_pending(), sq_[size_t(si_[i])].reset();
+    t_end_ = now;
+    for (int i = 0; i < 3; i++) {
+        if (hj_.tw_fin[i] && hj_.tw_reason[i] == 1) continue;
+        home_fail(std::string("No trigger on ") + char('a' + i) + " after full movement (check the tower's endstop" +
+                      (plan_.endstops[size_t(t[i]->endstop)].tmc >= 0 ? ", sensorless: raise driver_SGTHRS / the DIAG jumper)" : ")"),
+                  now);
+        for (bool& h : homed_) h = false;
+        return;
+    }
+    // every carriage is at its endstop: the effector is where the arms put it (delta.py home_position)
+    double pos[NUM_AXES];
+    for (int k = 0; k < NUM_AXES; k++) pos[k] = planner_->position(k);
+    for (int k = 0; k < 3; k++) pos[k] = dhome_[k], off_[k] = 0, gpos_[k] = dhome_[k];
+    set_planner_position(pos);
+    for (bool& h : homed_) h = true;
+    if (hj_.pass == 0 && t[0]->homing_retract_dist > 0) {   // back off, then a second slower approach
+        double away[NUM_AXES];
+        for (int k = 0; k < NUM_AXES; k++) away[k] = pos[k];
+        away[2] -= t[0]->homing_retract_dist;
+        add_planned_move(away, t[0]->homing_speed, now);
+        flush_lookahead();
+        hj_.pass = 1;
+        hstate_ = H_WAIT_IDLE;
+        return;
+    }
+    hj_.pass = 0;
+    home_msg_ = "homed ABC (delta): X" + f3(dhome_[0]) + " Y" + f3(dhome_[1]) + " Z" + f3(dhome_[2]);
+    if (io_.log) io_.log(home_msg_);
+    hstate_ = H_IDLE;
+#else
+    (void)now;
+#endif
 }
 
 void Toolhead::home_step(double now) {
@@ -1201,6 +1457,16 @@ void Toolhead::on_message(const Message& m, double now) {
     (void)now;
     if (!ok_ || hstate_ != H_MOVING || m.name != "trsync_state" || hj_.finished) return;   // the first verdict counts
 
+    if (dlt() && !hj_.probe) {   // each tower has its own endstop; all three must answer
+        if (m.get("can_trigger")) return;
+        bool all = true;
+        for (int i = 0; i < 3; i++) {
+            if (hj_.tw_trsync[i] == int(m.get("oid")) && !hj_.tw_fin[i]) hj_.tw_fin[i] = true, hj_.tw_reason[i] = int(m.get("trigger_reason"));
+            all = all && hj_.tw_fin[i];
+        }
+        if (all) hj_.finished = true;
+        return;
+    }
     int a = hj_.axes[hj_.idx];
     const StepperObj& s = plan_.steppers[size_t(si_[a])];
     if (m.get("oid") != s.trsync_oid || m.get("can_trigger")) return;
@@ -1316,6 +1582,25 @@ bool Toolhead::send_due(double now, bool may_stop) {
     for (uint64_t e : ends) inflight_.push({e, 1});
     inflight_count_ += moves;
     perf_.max_inflight = std::max(perf_.max_inflight, inflight_count_);
+    return true;
+}
+
+bool Toolhead::live_position(double now, double out[4]) const {
+    if (!ok_ || !planner_) return false;
+    // the steps planned so far, less what has not run yet at `now`
+    double rem[4] = {0, 0, 0, 0};
+    for (auto it = live_.rbegin(); it != live_.rend(); ++it) {
+        if (it->t1 <= now) break;
+        double f = it->t0 >= now ? 1.0 : (it->t1 - now) / (it->t1 - it->t0);
+        for (int a = 0; a < 4; a++) rem[a] += f * it->st[a];
+    }
+    for (int a = 0; a < 4; a++) {
+        double spm = pcfg_.steps_per_mm[a];
+        if (spm <= 0) return false;
+        double machine = (double(planner_->step_position(a)) - rem[a]) / spm;
+        // G-code coordinates (G92 offsets): the same difference as at the end of what is planned
+        out[a] = machine + (gpos_[a] - planner_->position(a));
+    }
     return true;
 }
 

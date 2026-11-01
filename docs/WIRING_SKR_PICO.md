@@ -3,6 +3,8 @@
 > **Works for the read-only link** (2026-10-11, see [HARDWARE_LOG.md](HARDWARE_LOG.md)): the ESP32-S3
 > identifies the SKR Pico and checks it every 5 s. Nothing configures, moves or heats yet.
 
+A stripboard carrier with a socket for every wire (UART, SD card, OLED, buttons) is drawn in [WIRING_STRIPBOARD.md](WIRING_STRIPBOARD.md).
+
 ## Why UART and not USB
 
 A USB link needs the ESP32-S3 to act as a USB **host** and to supply 5 V to the board. Small

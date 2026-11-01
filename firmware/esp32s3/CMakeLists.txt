@@ -15,11 +15,17 @@ endif()
 if(SF_FIXED)   # the int32/int64 motion test build (2026-10-27): idf.py -B build-captain-int -DSF_TIER=captain -DSF_FIXED=1 build
     list(APPEND SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_LIST_DIR}/tiers/fixed.defaults")
 endif()
+if(SF_KIN STREQUAL "delta")   # DECKHAND with delta kinematics instead of CoreXY (2026-10-31): idf.py -B build-delta -DSF_KIN=delta build
+    list(APPEND SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_LIST_DIR}/tiers/kin_delta.defaults")
+endif()
 if(DEFINED SF_EXTRA_DEFAULTS)   # e.g. a QEMU test build with the console on UART0
     list(APPEND SDKCONFIG_DEFAULTS "${SF_EXTRA_DEFAULTS}")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")   # one per build folder, so the tiers never mix
 set(PROJECT_VER "0.1.0-wip-${SF_TIER}")          # checked by the WiFi update (no cross-tier images)
+if(SF_KIN STREQUAL "delta")
+    set(PROJECT_VER "0.1.0-wip-${SF_TIER}-delta")  # nor a delta image over a CoreXY one
+endif()
 # The protocol library in ../../host is built as the "host" component (same code as the PC tests).
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../../host")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

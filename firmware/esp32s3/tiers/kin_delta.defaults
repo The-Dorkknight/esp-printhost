@@ -1,0 +1,2 @@
+# DECKHAND delta build (2026-10-31): delta + cartesian instead of CoreXY + cartesian. idf.py -DSF_KIN=delta
+CONFIG_SKIPPER_KIN_DELTA=y

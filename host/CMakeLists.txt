@@ -26,6 +26,7 @@ set(PH_SRCS
     src/resonance.cpp
     src/bedmesh.cpp
     src/machine_pro.cpp
+    src/machine_moon.cpp
     src/machine_panel.cpp
     src/panel.cpp)
 
@@ -44,6 +45,10 @@ if(ESP_PLATFORM)
     # DECKHAND (no CONFIG_SKIPPER_PRO): no shaping, calibration, mesh... (flash space)
     if(NOT CONFIG_SKIPPER_PRO)
         target_compile_definitions(${COMPONENT_LIB} PUBLIC PH_PRO=0)
+    endif()
+    # Kinematics (2026-10-31): the DECKHAND delta build has delta instead of CoreXY
+    if(CONFIG_SKIPPER_KIN_DELTA)
+        target_compile_definitions(${COMPONENT_LIB} PUBLIC PH_KIN_DELTA=1 PH_KIN_COREXY=0)
     endif()
     if(CONFIG_SKIPPER_BENCH_AT_BOOT)
         target_compile_definitions(${COMPONENT_LIB} PUBLIC PH_BENCH_LEGACY=1)

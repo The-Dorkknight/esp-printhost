@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c" "settings.c" "led.c" "link.cpp" "storage.c" "sdcard.c" "tier.c" "extras.c" "ota.c" "slicer_api.cpp" "crash.c" "oled.cpp" "pro.cpp" "accel.cpp" "usb_accel.cpp" "web_pro.cpp" "panel.cpp" "hostadc.c"
+idf_component_register(SRCS "main.c" "settings.c" "led.c" "link.cpp" "storage.c" "sdcard.c" "tier.c" "extras.c" "ota.c" "slicer_api.cpp" "crash.c" "oled.cpp" "pro.cpp" "moonraker_ws.cpp" "accel.cpp" "usb_accel.cpp" "web_pro.cpp" "panel.cpp" "hostadc.c"
                        INCLUDE_DIRS "."
                        REQUIRES host esp_adc esp_wifi esp_event esp_netif esp_http_server nvs_flash driver esp_timer
                                 spi_flash esp_rom dns_server fatfs sdmmc esp_driver_sdspi esp_driver_spi vfs

@@ -1026,6 +1026,9 @@ std::string Machine::start_motor_test(size_t i, double rpm, double seconds, int 
         // the speed-up and slow-down add half a second of cruise distance: DIST is the whole way
         seconds = std::max(0.0, sg_dist / sg_speed - 0.5);
         int ax = th_ ? th_->axis_of(i) : -1;
+        if (plan_.printer.delta && ax >= 0 && ax < 3)
+            return "error: on a delta one tower alone drags the head sideways and can pull the arms off: use 1. "
+                   "Hard stop through G28 instead (all three towers) to tune " + s.name;
         if (plan_.printer.corexy && (ax == 0 || ax == 1))
             return "error: on CoreXY one motor alone moves the head diagonally: use 1. Hard stop (the real homing "
                    "move, both motors) to tune " + s.name;
@@ -1964,7 +1967,7 @@ static const char* HELP_TEXT =
     "CAPTAIN / SKIPPER: SET_INPUT_SHAPER [SHAPER_FREQ_X= SHAPER_TYPE_X= ...] [SAVE=1], SET_PRESSURE_ADVANCE ADVANCE= "
     "[SMOOTH_TIME=] [SAVE=1], SHAPER_CALIBRATE / TEST_RESONANCES AXIS=X|Y, BED_MESH_CALIBRATE, BED_MESH_OUTPUT, "
     "BED_MESH_CLEAR, BED_MESH_PROFILE SAVE|LOAD|REMOVE=default, SCREWS_TILT_CALCULATE, G2/G3 arcs, G10/G11 with "
-    "SET_RETRACTION, EXCLUDE_OBJECT NAME=. "
+    "SET_RETRACTION, EXCLUDE_OBJECT NAME=, RESPOND MSG=\"text\". "
     "Moves: G28 (runs [homing_override] if printer.cfg has one), G0/G1, PROBE, JOG, M114. Macros: any [gcode_macro NAME] by its name (plain G-code lines). Printing: SDCARD_PRINT_FILE [FILENAME=name], M20 (list), M23 name + M24, "
     "PAUSE/M25, RESUME, CANCEL_PRINT. Safety: M112 (emergency stop), FIRMWARE_RESTART.";
 
@@ -1974,6 +1977,42 @@ std::string Machine::command(const std::string& raw, double now) {
     size_t b = line.find_first_not_of(" \t");
     if (b == std::string::npos) return "error: empty command. Try: HELP";
     line = line.substr(b);
+    // RESPOND [PREFIX=...] MSG="text" (Klipper's respond module): the text to the console and the log.
+    // Its quoted MSG may hold spaces, so it is read from the line itself. A spaghetti detector (Pasta
+    // Inspector) says what it did this way. (From SkiPiPir, 2026-10-30.)
+    if (line.size() >= 7 && (line.size() == 7 || isspace((unsigned char)line[7]))) {
+        std::string w = line.substr(0, 7);
+        for (auto& c : w) c = char(toupper((unsigned char)c));
+        if (w == "RESPOND") {
+            std::string msg, prefix = "echo:";
+            size_t m = 7;
+            while (m < line.size()) {
+                while (m < line.size() && isspace((unsigned char)line[m])) m++;
+                size_t eq = line.find('=', m);
+                if (eq == std::string::npos) break;
+                std::string key = line.substr(m, eq - m);
+                for (auto& c : key) c = char(toupper((unsigned char)c));
+                size_t v = eq + 1, e;
+                std::string val;
+                if (v < line.size() && (line[v] == '"' || line[v] == '\'')) {
+                    e = line.find(line[v], v + 1);
+                    if (e == std::string::npos) e = line.size();
+                    val = line.substr(v + 1, e - v - 1);
+                    m = e + 1;
+                } else {
+                    e = line.find_first_of(" \t", v);
+                    if (e == std::string::npos) e = line.size();
+                    val = line.substr(v, e - v);
+                    m = e;
+                }
+                if (key == "MSG") msg = val;
+                else if (key == "PREFIX") prefix = val;
+            }
+            if (msg.size() > 300) msg.resize(300);
+            if (io_.log) io_.log(prefix + " " + msg);
+            return "ok " + prefix + " " + msg;
+        }
+    }
     std::string name;
     std::map<std::string, std::string> p;
     // M20 / M23 (Marlin-style SD commands): the file name is free text, not G-code parameters
@@ -2406,7 +2445,12 @@ std::string Machine::command(const std::string& raw, double now) {
 // ---------------------------------------------------------------- printing a file
 
 std::string Machine::print_start(double now, const std::string& file) {
-    obj_ = Objects();   // EXCLUDE_OBJECT: a new file defines its own objects
+    {   // EXCLUDE_OBJECT: a new file defines its own objects (the revision only ever grows, so a
+        // watcher such as Pasta Inspector always sees a new print's list as new)
+        unsigned r = obj_.rev;
+        obj_ = Objects();
+        obj_.rev = r + 1;
+    }
     if (printing()) return "error: a print is already running";
     // the benchmark file moves relative to wherever the head is, without homing: never as a print
     // (2026-10-28: started from the Printer page, it was refused at its first move, as it should be)
@@ -2424,6 +2468,7 @@ std::string Machine::print_start(double now, const std::string& file) {
     job_.state = "printing";
     job_.file = name;
     job_.started = now;
+    job_.e_start = th_ ? th_->extruded() : 0;   // filament_used counts from here
     if (io_.log) io_.log("print started: " + name);
     return "ok printing " + name;
 }

@@ -23,6 +23,15 @@
 #ifndef PH_PRO
 #define PH_PRO 1   // the ESP32 DECKHAND build sets 0: no shaping, calibration, mesh... (flash space)
 #endif
+// Kinematics compiled in (2026-10-31). Cartesian is always there. DECKHAND has no room for everything:
+// its default is CoreXY, and a separate DECKHAND build (-DPH_KIN_DELTA=1 -DPH_KIN_COREXY=0) has delta
+// instead. CAPTAIN / SKIPPER and the PC build have both.
+#ifndef PH_KIN_COREXY
+#define PH_KIN_COREXY 1
+#endif
+#ifndef PH_KIN_DELTA
+#define PH_KIN_DELTA PH_PRO
+#endif
 #ifndef PH_FIXED
 #define PH_FIXED 0   // 1: the integer motion path (MotionShaperFx, integer step times); test builds, 2026-10-27
 #endif

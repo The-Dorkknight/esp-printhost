@@ -18,6 +18,8 @@ Status: ✅ done · 🔬 works on real hardware · 🟡 next · ⬜ later. What 
 | ✅ T10-T11 | Build tool and Flasher (Slave + Master tabs), shipped firmware, SHA-256 checks | `skipper_fw.py`, `skipper_esp.py`, `skipper_flasher.py`, `fw_panel.py`, `master_panel.py` |
 | 🔬 T12 | ESP32-S3 firmware: WiFi AP, status page, live console, settings, status LED | `firmware/esp32s3/` |
 | 🔬 T13 | Read-only Klipper link over UART: `ph::KLink` (identify, dictionary, `get_config`), `skr-pico-uart` preset, wiring guide, UART diagnostics | `host/src/klink.cpp`, `firmware/esp32s3/main/link.cpp`, `docs/WIRING_SKR_PICO.md` |
+| 🟡 T14 | Pasta Inspector dongle `/websocket` (exclude object, pause, M112): engine PC-tested; firmware needs an ESP-IDF build and a real dongle | `moonraker_ws.cpp`, `machine_moon.cpp`, [PASTA_DONGLE.md](PASTA_DONGLE.md) |
+| 🟡 T15 | Delta kinematics (PC-tested; separate DECKHAND delta build). Next: ESP-IDF build + flash size, a real delta, `DELTA_CALIBRATE`, round bed mesh | `delta.h`, `toolhead.cpp`, [DELTA.md](DELTA.md) |
 
 ## Next: real Klipper behaviour on the ESP32-S3
 

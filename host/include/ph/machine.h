@@ -97,6 +97,13 @@ public:
     void all_off(double now);
     // JSON object for the web pages: heaters, fans, steppers, tests, shutdown.
     std::string status_json(double now) const;
+    // Klipper's status objects, as Moonraker reports them (SkiPiPir 2026-10-30, for Pasta Inspector):
+    // print_stats, toolhead, motion_report, pause_resume, idle_timeout, virtual_sdcard,
+    // display_status, extruder, and exclude_object without its object list (excluded_objects,
+    // current_object). The object list (with outlines) separately, and its revision.
+    std::string moonraker_status_json(double now) const;
+    std::string moonraker_objects_json() const;
+    unsigned objects_rev() const { return obj_.rev; }
 
     // The heaters' last 5 minutes (one line a second) as CSV, for diagnosing heating problems.
     std::string heater_log_csv() const;
@@ -275,6 +282,9 @@ private:
     struct Objects {
         std::vector<std::string> names;
         std::vector<std::pair<double, double>> centers;
+        std::vector<std::vector<std::pair<float, float>>> polygons;   // POLYGON=[[x,y],...] (SkiPiPir)
+        std::vector<std::pair<double, double>> heights;               // PI_Z0 / PI_Z1 (Pasta Inspector), NAN unknown
+        unsigned rev = 0;                                             // changes whenever the list does
         std::vector<std::string> excluded;
         std::string current;
         bool is_excluded(const std::string& n) const;
@@ -393,6 +403,7 @@ private:
         // From the slicer's comments, when it writes them (Cura, PrusaSlicer, OrcaSlicer); 0 / -1 unknown.
         int layer = 0, layers = 0;
         double layer_h = 0, layer_z = -1, slicer_s = 0;
+        double e_start = 0;           // Toolhead::extruded() when it started (filament_used)
     } job_;
     void print_comment(const std::string& c);
     double print_eta(double now, double progress) const;

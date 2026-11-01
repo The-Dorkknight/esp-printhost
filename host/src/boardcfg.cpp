@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Matthew Armstrong (https://github.com/The-Dorkknight)
 // SPDX-License-Identifier: GPL-3.0-only. No warranty. Work in progress (0.1.0-wip).
 #include "ph/boardcfg.h"
+#include "ph/delta.h"
 #include "ph/shaping.h"   // PH_PRO
 
 #include <sstream>
@@ -358,7 +359,30 @@ void build_steppers(Ctx& c) {
         st.full_steps = int(s->geti("full_steps_per_rotation", 200, 1, 100000));
         if (st.full_steps % 4) s->report("full_steps_per_rotation must be a multiple of 4" + line_ref(s, "full_steps_per_rotation"));
         double pulse = s->getf("step_pulse_duration", 0.000002, 0.0, 0.001);   // Klipper default without the TMC optimisation
-        if (st.name != "extruder") {   // a rail: limits and homing (stepper.py PrinterRail)
+        bool delta_rail = false;
+        if (const ConfigSection* ps = c.cfg.section("printer"))
+            delta_rail = lower(ps->get("kinematics", "none")) == "delta" &&
+                         (st.name == "stepper_a" || st.name == "stepper_b" || st.name == "stepper_c");
+        if (delta_rail) {   // a delta tower (delta.py): the carriage goes up to its endstop, position_endstop is the nozzle height there
+            st.has_rail = true;
+            st.endstop_spec = s->get("endstop_pin", "");
+            st.endstop_line = s->line_of("endstop_pin");
+            st.position_min = 0;
+            st.position_endstop = s->getf("position_endstop");
+            st.position_max = st.position_endstop;
+            st.homing_speed = s->getf("homing_speed", 5.0, 0.001, 1e6);
+            st.second_homing_speed = s->getf("second_homing_speed", st.homing_speed / 2, 0.001, 1e6);
+            bool sensorless = st.endstop_spec.find("virtual_endstop") != std::string::npos;
+            st.homing_retract_dist = s->getf("homing_retract_dist", sensorless ? 0.0 : 5.0, 0.0, 1e6);
+            st.homing_positive_dir = true;
+            if (st.position_endstop <= 0) s->report("position_endstop must be above 0 on a delta" + line_ref(s, "position_endstop"));
+            if (s->has("position_max") || s->has("position_min"))
+                s->report("position_min / position_max are not used on a delta tower (position_endstop is the height)");
+            const char* nm = st.name.c_str();
+            double dflt_angle = nm[8] == 'a' ? 210.0 : nm[8] == 'b' ? 330.0 : 90.0;
+            st.angle = s->getf("angle", dflt_angle, -360.0, 360.0);
+            st.arm_length = s->getf("arm_length", 0.0, 0.0, 1e5);   // 0: the [printer] arm_length
+        } else if (st.name != "extruder") {   // a rail: limits and homing (stepper.py PrinterRail)
             st.has_rail = true;
             st.endstop_spec = s->get("endstop_pin", "");
             st.endstop_line = s->line_of("endstop_pin");
@@ -608,9 +632,46 @@ void build_motion(Ctx& c) {
         PrinterLimits& pr = c.plan.printer;
         pr.present = true;
         std::string k = lower(s->get("kinematics", "none"));
-        if (k == "corexy") pr.corexy = true;
-        else if (k != "cartesian" && k != "none")
-            s->report("kinematics: cartesian and corexy are supported" + line_ref(s, "kinematics"));
+        if (k == "corexy") {
+#if PH_KIN_COREXY
+            pr.corexy = true;
+#else
+            s->report("kinematics: corexy is not in this build (the DECKHAND delta build has cartesian and delta)" + line_ref(s, "kinematics"));
+#endif
+        } else if (k == "delta") {
+#if PH_KIN_DELTA
+            pr.delta = true;
+            pr.delta_radius = s->getf("delta_radius", 0.0, 0.0, 1e5);
+            pr.print_radius = s->getf("print_radius", pr.delta_radius, 0.0, 1e5);
+            pr.minimum_z_position = s->getf("minimum_z_position", 0.0, -1e5, 1e5);
+            pr.arm_length = s->getf("arm_length", 0.0, 0.0, 1e5);
+            if (pr.delta_radius <= 0) s->report("delta_radius is required on a delta (above 0)" + line_ref(s, "kinematics"));
+            DeltaGeom g;
+            double arm[3], ang[3], endst[3];
+            bool have = true;
+            const char* tn[3] = {"stepper_a", "stepper_b", "stepper_c"};
+            for (int i = 0; i < 3; i++) {
+                const StepperObj* t = c.plan.stepper(tn[i]);
+                if (!t || !t->has_rail) { s->report(std::string("kinematics: delta needs [") + tn[i] + "]" + line_ref(s, "kinematics")); have = false; break; }
+                arm[i] = t->arm_length > 0 ? t->arm_length : pr.arm_length;
+                ang[i] = t->angle;
+                endst[i] = t->position_endstop;
+                if (arm[i] <= 0) { s->report(std::string("arm_length is required for ") + tn[i] + " (or once in [printer])"); have = false; }
+                if (t->endstop_spec.empty()) { s->report(std::string("endstop_pin is required for ") + tn[i] + " on a delta"); have = false; }
+            }
+            if (have) {
+                g.set(arm, ang, pr.delta_radius);
+                if (!g.valid) s->report("delta: arm_length must be longer than delta_radius");
+                else {
+                    double mz = std::min(endst[0], std::min(endst[1], endst[2]));
+                    if (pr.minimum_z_position > mz) s->report("minimum_z_position must not be above the lowest position_endstop");
+                }
+            }
+#else
+            s->report("kinematics: delta is not in this build (it is in CAPTAIN and SKIPPER, and in the DECKHAND delta build)" + line_ref(s, "kinematics"));
+#endif
+        } else if (k != "cartesian" && k != "none")
+            s->report("kinematics: cartesian, corexy and delta are supported" + line_ref(s, "kinematics"));
         pr.max_velocity = s->getf("max_velocity", 0.0, 0.0, 1e6);
         pr.max_accel = s->getf("max_accel", 0.0, 0.0, 1e7);
         if (!c.plan.steppers.empty() && (pr.max_velocity <= 0 || pr.max_accel <= 0))

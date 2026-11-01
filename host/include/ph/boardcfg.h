@@ -150,11 +150,14 @@ struct StepperObj {
     double position_min = 0, position_max = 0, position_endstop = 0;
     double homing_speed = 5, second_homing_speed = 2.5, homing_retract_dist = 5;
     bool homing_positive_dir = false;
+    double arm_length = 0, angle = 0;   // delta towers (stepper_a / b / c): arm and tower angle (degrees)
 };
 
 struct PrinterLimits {           // [printer]
     bool present = false;
     bool corexy = false;         // kinematics: corexy (2026-10-27): stepper_x = motor A, stepper_y = motor B
+    bool delta = false;          // kinematics: delta (2026-10-31): stepper_a / b / c are the towers
+    double delta_radius = 0, print_radius = 0, minimum_z_position = 0, arm_length = 0;   // delta
     double max_velocity = 0, max_accel = 0, max_z_velocity = 0, max_z_accel = 0;
     double square_corner_velocity = 5;
     double min_extrude_temp = 170, max_extrude_only_velocity = 0;   // from [extruder]

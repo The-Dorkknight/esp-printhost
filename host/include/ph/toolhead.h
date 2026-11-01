@@ -9,6 +9,7 @@
 //  the endstop triggers); sensorless homing sets up the TMC2209 like Klipper's tmc.py.
 #pragma once
 #include "ph/boardcfg.h"
+#include "ph/delta.h"
 #include "ph/gcode.h"
 #include "ph/msgproto.h"
 #include "ph/planner.h"
@@ -141,6 +142,11 @@ public:
     std::string status_json(double now) const;
     std::string last_error() const { return last_error_; }
     double position(int axis) const { return gpos_[axis]; }   // G-code position (after G92 offsets)
+    // Where the head is at host time `now` (G-code coordinates), from the steps sent and their times:
+    // Klipper's motion_report.live_position. False if moves are not set up.
+    bool live_position(double now, double out[4]) const;
+    // Filament pushed by moves so far (mm, positive E only), never reset.
+    double extruded() const { return extruded_; }
     bool homed(int axis) const { return homed_[axis]; }
     // How far the last homing move of this axis went before it stopped (mm; NAN if not known).
     double last_home_moved(int axis) const { return last_moved_[axis]; }
@@ -222,6 +228,9 @@ private:
         bool triggered = false, finished = false;
         int reason = 0;
         int late_tries = 0;       // homing move prepared too late to send (see home_begin_axis)
+        bool tw_fin[3] = {false, false, false};   // delta: this tower's endstop has answered
+        int tw_reason[3] = {0, 0, 0};
+        int tw_trsync[3] = {-1, -1, -1};          // delta: the trsync that stops this tower
     };
 
     void on_segment(const Segment& s);
@@ -248,6 +257,12 @@ private:
     int si_[NUM_AXES] = {-1, -1, -1, -1};    // stepper index per axis
     std::vector<StepQueue> sq_;              // per stepper
     std::unique_ptr<Planner> planner_;
+    struct LiveSeg {
+        double t0, t1;
+        int32_t st[4];
+    };
+    double extruded_ = 0;
+    std::deque<LiveSeg> live_;   // segments planned, from the one running now on (live_position)
     PlannerConfig pcfg_;
     double t_ = 0;                           // host time where the next planned segment starts
     double t_end_ = 0;                       // host time the last queued step happens
@@ -337,6 +352,21 @@ private:
     } rs_;
     // CoreXY (Klipper corexy.py): motor A (stepper_x) = X + Y, motor B (stepper_y) = X - Y, in steps.
     bool corexy_ = false;
+    bool cxy() const { return PH_KIN_COREXY && corexy_; }
+    // Delta (Klipper delta.py, 2026-10-31): X Y Z are the effector, the planner works in them as on any
+    // printer; the three towers (stepper_a / b / c, si_[0..2]) get their steps from the inverse
+    // kinematics at the end of the pipeline (delta_steps), so shaping and pressure advance are unchanged.
+    bool delta_ = false;
+    bool dlt() const { return PH_KIN_DELTA && delta_; }
+    DeltaGeom dg_;
+    double dabs_end_[3] = {}, dhome_[3] = {};          // carriage height at each endstop; effector there
+    double dmax_z_ = 0, dmin_z_ = 0, dmax_xy2_ = 0, dslow_xy2_ = 0, dvslow_xy2_ = 0, dspm_ = 1;
+    int64_t dcart_[3] = {0, 0, 0}, dtow_[3] = {0, 0, 0};   // steps so far: effector axes, towers
+    void delta_steps(const int32_t in[NUM_AXES], int32_t out[NUM_AXES]);
+    void set_planner_position(const double pos[NUM_AXES]);
+    bool home_begin_delta(double now);
+    void home_finish_delta(double now);
+    std::vector<std::pair<size_t, int>> probe_motors(size_t i) const;
     // The motors an axis moves, and the direction of each for a positive move: (stepper, +1/-1).
     std::vector<std::pair<size_t, int>> axis_motors(int axis) const;
     void resonance_generate(double upto);   // seconds from the start

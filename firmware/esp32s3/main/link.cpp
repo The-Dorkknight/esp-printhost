@@ -98,12 +98,45 @@ static const char *OLD_DEFAULT_CFG_V2 =
     "sensor_pin: gpio26\n";
 // The machine's status (heaters, fans, motors, tests) as JSON, for /status.json.
 static std::string s_machine_json;
+// Moonraker-shaped status for the Pasta Inspector dongle's /websocket (moonraker_ws.cpp). Built on the
+// link task, at most every 200 ms, and only while a websocket client has subscribed (sf_moon_want).
+static std::string s_moon_json, s_moon_objs;
+static unsigned s_moon_rev;
+static double s_moon_time;
+static volatile int s_moon_want;
+extern "C" void sf_moon_want(int on)
+{
+    s_moon_want = on;
+}
 static std::string s_prev_heater_log;   // the heater log of the last session (kept across a board restart)
 static volatile bool s_printing;
 
 extern "C" bool sf_printing(void)
 {
     return s_printing;
+}
+
+// {"eventtime":..,"rev":N,"status":{...}}; exclude_object.objects is put in only when the object list
+// changed since `have_rev` (-1: always). NULL when there is no printer state yet. free() it.
+extern "C" char *sf_moon_status_dup(long have_rev)
+{
+    if (!s_mux) return NULL;
+    char *out = NULL;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    if (!s_moon_json.empty()) {
+        std::string st = s_moon_json;
+        if (have_rev != (long)s_moon_rev) {
+            size_t k = st.rfind("\"exclude_object\":{");
+            if (k != std::string::npos) st.insert(k + 18, "\"objects\":" + (s_moon_objs.empty() ? std::string("[]") : s_moon_objs) + ",");
+        }
+        char head[96];
+        snprintf(head, sizeof head, "{\"eventtime\":%.3f,\"rev\":%u,\"status\":", s_moon_time, s_moon_rev);
+        std::string all = std::string(head) + st + "}";
+        out = (char *)malloc(all.size() + 1);
+        if (out) memcpy(out, all.c_str(), all.size() + 1);
+    }
+    xSemaphoreGive(s_mux);
+    return out;
 }
 
 // Reads a G-code file line by line: either the one in the flash partition (storage.c, inflated if the
@@ -1099,6 +1132,27 @@ static void link_task(void *arg)
                 publish_diag(link);   // after each failed attempt: what came over the wire
             }
         }
+#if CONFIG_SKIPPER_PRO
+        if (s_moon_want) {
+            static uint32_t last_moon;
+            uint32_t mnow = (uint32_t)(esp_timer_get_time() / 1000);
+            if (mnow - last_moon >= 200) {
+                last_moon = mnow;
+                std::string mj, mo;
+                unsigned rev = s_moon_rev;
+                if (running && bs.machine()) {
+                    mj = bs.machine()->moonraker_status_json(link.host_time_s());
+                    rev = bs.machine()->objects_rev();
+                    if (rev != s_moon_rev || s_moon_objs.empty()) mo = bs.machine()->moonraker_objects_json();
+                }
+                xSemaphoreTake(s_mux, portMAX_DELAY);
+                s_moon_json.swap(mj);
+                if (!mo.empty()) s_moon_objs.swap(mo), s_moon_rev = rev;
+                s_moon_time = link.host_time_s();
+                xSemaphoreGive(s_mux);
+            }
+        }
+#endif
         if (running != was_running) {
             if (!running) {
                 ESP_LOGW(TAG, "printer board lost: %s", bs.last_error().c_str());

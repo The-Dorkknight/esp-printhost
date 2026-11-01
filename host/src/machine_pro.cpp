@@ -195,6 +195,7 @@ void Machine::pro_tick(double now) {
 
 std::string Machine::start_resonance_test(const std::map<std::string, std::string>& p, bool calibrate, double now) {
     if (!th_ || !th_->ok()) return "error: moves are not set up";
+    if (plan_.printer.delta) return "error: the resonance test is not supported on a delta yet";
     auto it = p.find("AXIS");
     std::string ax = it == p.end() ? "" : it->second;
     int axis = (ax == "X" || ax == "x") ? 0 : (ax == "Y" || ax == "y") ? 1 : -1;
@@ -399,9 +400,45 @@ bool Machine::pro_command(const std::string& name, const std::map<std::string, s
         for (auto& c : n) c = char(toupper((unsigned char)c));
         double cx = NAN, cy = NAN;
         pair_of(p, "CENTER", cx, cy);
-        if (std::find(obj_.names.begin(), obj_.names.end(), n) == obj_.names.end() && obj_.names.size() < 64) {
+        // POLYGON=[[x,y],[x,y],...]: the outline (Klipper's exclude_object keeps it for Moonraker's clients)
+        std::vector<std::pair<float, float>> poly;
+        auto pg = p.find("POLYGON");
+        if (pg != p.end()) {
+            std::vector<double> v;
+            const char* c = pg->second.c_str();
+            while (*c && v.size() < 512) {
+                if ((*c >= '0' && *c <= '9') || *c == '-' || *c == '.' || *c == '+') {
+                    char* e = nullptr;
+                    double d = strtod(c, &e);
+                    if (e == c) break;
+                    if (std::isfinite(d) && std::fabs(d) < 1e5) v.push_back(d);
+                    c = e;
+                } else {
+                    c++;
+                }
+            }
+            for (size_t i = 0; i + 1 < v.size(); i += 2) poly.push_back({float(v[i]), float(v[i + 1])});
+        }
+        auto num = [&](const char* k) {
+            auto it2 = p.find(k);
+            if (it2 == p.end()) return double(NAN);
+            char* e = nullptr;
+            double d = strtod(it2->second.c_str(), &e);
+            return e != it2->second.c_str() && std::isfinite(d) ? d : double(NAN);
+        };
+        auto f = std::find(obj_.names.begin(), obj_.names.end(), n);
+        if (f == obj_.names.end() && obj_.names.size() < 64) {
             obj_.names.push_back(n);
             obj_.centers.push_back({cx, cy});
+            obj_.polygons.push_back(poly);
+            obj_.heights.push_back({num("PI_Z0"), num("PI_Z1")});
+            obj_.rev++;
+        } else if (f != obj_.names.end()) {   // defined again (Klipper replaces it)
+            size_t i = size_t(f - obj_.names.begin());
+            obj_.centers[i] = {cx, cy};
+            obj_.polygons[i] = poly;
+            obj_.heights[i] = {num("PI_Z0"), num("PI_Z1")};
+            obj_.rev++;
         }
         return reply = "ok", true;
     }
@@ -409,6 +446,7 @@ bool Machine::pro_command(const std::string& name, const std::map<std::string, s
         auto it = p.find("NAME");
         if (p.count("RESET")) {
             obj_.excluded.clear();
+            obj_.rev++;
             return reply = "ok no objects excluded", true;
         }
         std::string n = p.count("CURRENT") ? obj_.current : it == p.end() ? "" : it->second;
@@ -418,7 +456,7 @@ bool Machine::pro_command(const std::string& name, const std::map<std::string, s
             for (auto& x : obj_.excluded) l += " " + x;
             return reply = "ok excluded:" + (l.empty() ? std::string(" none") : l), true;
         }
-        if (!obj_.is_excluded(n)) obj_.excluded.push_back(n);
+        if (!obj_.is_excluded(n)) obj_.excluded.push_back(n), obj_.rev++;
         if (io_.log) io_.log("excluding object " + n);
         return reply = "ok " + n + " excluded: the rest of it is skipped", true;
     }

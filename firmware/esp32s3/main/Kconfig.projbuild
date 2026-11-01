@@ -78,6 +78,15 @@ menu "Skipper Flipper"
         help
             Off in DECKHAND (its 2 MB flash is nearly full); on in CAPTAIN and SKIPPER.
 
+    config SKIPPER_KIN_DELTA
+        bool "DECKHAND delta build: delta kinematics instead of CoreXY (2026-10-31)"
+        default n
+        depends on !SKIPPER_PRO
+        help
+            DECKHAND's 2 MB flash has no room for both. Default DECKHAND: cartesian and CoreXY.
+            This build: cartesian and delta (kinematics: delta in printer.cfg). CAPTAIN and SKIPPER
+            always have all three. idf.py -DSF_KIN=delta.
+
     config SKIPPER_HOST_ADC
         bool "Temperature sensors on the ESP32's own pins (esp32:gpioN, e.g. a chamber thermistor)"
         default y

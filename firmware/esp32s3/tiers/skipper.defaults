@@ -26,3 +26,6 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
 # Error names in messages ("ESP_ERR_TIMEOUT" rather than 0x107); DECKHAND leaves them out for space
 CONFIG_ESP_ERR_TO_NAME_LOOKUP=y
+
+# Pasta Inspector dongle: Moonraker websocket (/websocket, moonraker_ws.cpp)
+CONFIG_HTTPD_WS_SUPPORT=y
